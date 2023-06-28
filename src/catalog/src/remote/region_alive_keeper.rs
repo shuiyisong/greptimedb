@@ -180,7 +180,8 @@ impl HeartbeatResponseHandler for RegionAliveKeepers {
 
             let Some(keeper) = self.keepers.lock().await.get(&table_ident).cloned() else {
                 // Alive keeper could be affected by lagging msg, just warn and ignore.
-                warn!("Alive keeper for table {table_ident} is not found!");
+                // remove warn since we disable alive keeper on cloud
+                // warn!("Alive keeper for table {table_ident} is not found!");
                 continue;
             };
 

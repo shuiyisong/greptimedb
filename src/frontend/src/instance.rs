@@ -288,13 +288,10 @@ impl Instance {
         requests: InsertRequests,
         ctx: QueryContextRef,
     ) -> Result<Output> {
-        let _ = future::join_all(
-            requests
-                .inserts
-                .iter()
-                .map(|x| self.create_or_alter_table_on_demand(ctx.clone(), x)),
-        )
-        .await;
+        let _ = requests
+            .inserts
+            .iter()
+            .map(|x| self.create_or_alter_table_on_demand(ctx.clone(), x));
 
         let query = Request::Inserts(requests);
         GrpcQueryHandler::do_query(&*self.grpc_query_handler, query, ctx).await
