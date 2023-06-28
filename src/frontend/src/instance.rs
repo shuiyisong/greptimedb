@@ -287,10 +287,10 @@ impl Instance {
         requests: InsertRequests,
         ctx: QueryContextRef,
     ) -> Result<Output> {
-        let _ = requests
-            .inserts
-            .iter()
-            .map(|x| self.create_or_alter_table_on_demand(ctx.clone(), x));
+        for req in requests.inserts.iter() {
+            self.create_or_alter_table_on_demand(ctx.clone(), req)
+                .await?;
+        }
 
         let query = Request::Inserts(requests);
         GrpcQueryHandler::do_query(&*self.grpc_query_handler, query, ctx).await
