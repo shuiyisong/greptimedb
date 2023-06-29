@@ -243,6 +243,9 @@ pub enum Error {
 
     #[snafu(display("A generic error has occurred, msg: {}", msg))]
     Generic { msg: String, location: Location },
+
+    #[snafu(display("Get null from cache, key: {}", key))]
+    CacheNotGet { key: String, location: Location },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -265,6 +268,7 @@ impl ErrorExt for Error {
 
             Error::Generic { .. }
             | Error::SystemCatalogTypeMismatch { .. }
+            | Error::CacheNotGet { .. }
             | Error::UpgradeWeakCatalogManagerRef { .. } => StatusCode::Internal,
 
             Error::ReadSystemCatalog { source, .. } | Error::CreateRecordBatch { source, .. } => {

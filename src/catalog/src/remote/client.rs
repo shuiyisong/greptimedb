@@ -27,7 +27,8 @@ use moka::future::{Cache, CacheBuilder};
 use snafu::ResultExt;
 
 use super::KvCacheInvalidator;
-use crate::error::{Error, GenericSnafu, MetaSrvSnafu, Result};
+use crate::error::Error::CacheNotGet;
+use crate::error::{CacheNotGetSnafu, Error, GenericSnafu, MetaSrvSnafu, Result};
 use crate::metrics::{METRIC_CATALOG_KV_GET, METRIC_CATALOG_KV_REMOTE_GET};
 use crate::remote::{Kv, KvBackend, KvBackendRef, ValueIter};
 
@@ -35,7 +36,7 @@ const CACHE_MAX_CAPACITY: u64 = 10000;
 const CACHE_TTL_SECOND: u64 = 10 * 60;
 const CACHE_TTI_SECOND: u64 = 5 * 60;
 
-pub type CacheBackendRef = Arc<Cache<Vec<u8>, Option<Kv>>>;
+pub type CacheBackendRef = Arc<Cache<Vec<u8>, Kv>>;
 pub struct CachedMetaKvBackend {
     kv_backend: KvBackendRef,
     cache: CacheBackendRef,
@@ -56,11 +57,29 @@ impl KvBackend for CachedMetaKvBackend {
         let init = async {
             let _timer = timer!(METRIC_CATALOG_KV_REMOTE_GET);
 
-            self.kv_backend.get(key).await
+            match self.kv_backend.get(key).await {
+                Ok(val) => match val {
+                    Some(val) => Ok(val),
+                    None => CacheNotGetSnafu {
+                        key: String::from_utf8(key.to_vec()).unwrap(),
+                    }
+                    .fail(),
+                },
+                Err(e) => Err(e),
+            }
         };
 
-        let schema_provider = self.cache.try_get_with_by_ref(key, init).await;
-        schema_provider.map_err(|e| GenericSnafu { msg: e.to_string() }.build())
+        let ret = self.cache.try_get_with_by_ref(key, init).await;
+
+        let ret = match ret {
+            Ok(val) => Ok(Some(val)),
+            Err(e) => match e.as_ref() {
+                CacheNotGet { .. } => Ok(None),
+                _ => Err(e),
+            },
+        };
+
+        ret.map_err(|e| GenericSnafu { msg: e.to_string() }.build())
     }
 
     async fn set(&self, key: &[u8], val: &[u8]) -> Result<()> {
