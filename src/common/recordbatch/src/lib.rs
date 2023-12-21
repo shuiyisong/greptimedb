@@ -39,6 +39,10 @@ pub trait RecordBatchStream: Stream<Item = Result<RecordBatch>> {
     fn output_ordering(&self) -> Option<&[OrderOption]> {
         None
     }
+
+    fn metrics(&self) -> Option<String> {
+        None
+    }
 }
 
 pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send>>;

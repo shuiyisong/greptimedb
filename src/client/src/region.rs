@@ -24,7 +24,7 @@ use common_meta::datanode_manager::{AffectedRows, Datanode};
 use common_meta::error::{self as meta_error, Result as MetaResult};
 use common_recordbatch::error::ExternalSnafu;
 use common_recordbatch::{RecordBatchStreamWrapper, SendableRecordBatchStream};
-use common_telemetry::error;
+use common_telemetry::{error, warn};
 use prost::Message;
 use snafu::{location, Location, OptionExt, ResultExt};
 use tokio_stream::StreamExt;
@@ -124,16 +124,23 @@ impl RegionRequester {
                 let flight_message = flight_message
                     .map_err(BoxedError::new)
                     .context(ExternalSnafu)?;
-                let FlightMessage::Recordbatch(record_batch) = flight_message else {
-                    yield IllegalFlightMessagesSnafu {
+
+                match flight_message {
+                    FlightMessage::Recordbatch(record_batch) => yield Ok(record_batch),
+                    FlightMessage::Metrics(s) => {
+                        warn!("[DEBUG]receive metrics in region: {:?}", s);
+                        break;
+                    }
+                    _ => {
+                        yield IllegalFlightMessagesSnafu {
                             reason: "A Schema message must be succeeded exclusively by a set of RecordBatch messages"
                         }
                         .fail()
                         .map_err(BoxedError::new)
                         .context(ExternalSnafu);
-                    break;
-                };
-                yield Ok(record_batch);
+                        break;
+                    }
+                }
             }
         }));
         let record_batch_stream = RecordBatchStreamWrapper {

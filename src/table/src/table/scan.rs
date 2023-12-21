@@ -144,6 +144,10 @@ impl RecordBatchStream for StreamWithMetricWrapper {
     fn schema(&self) -> SchemaRef {
         self.stream.schema()
     }
+
+    fn metrics(&self) -> Option<String> {
+        Some(self.metric.mem_used().to_string())
+    }
 }
 
 #[cfg(test)]

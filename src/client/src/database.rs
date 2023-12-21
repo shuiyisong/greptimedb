@@ -28,8 +28,8 @@ use common_grpc::flight::{FlightDecoder, FlightMessage};
 use common_query::Output;
 use common_recordbatch::error::ExternalSnafu;
 use common_recordbatch::RecordBatchStreamWrapper;
-use common_telemetry::logging;
 use common_telemetry::tracing_context::W3cTrace;
+use common_telemetry::{logging, warn};
 use futures_util::StreamExt;
 use prost::Message;
 use snafu::{ensure, ResultExt};
@@ -321,6 +321,10 @@ impl Database {
                     output_ordering: None,
                 };
                 Ok(Output::Stream(Box::pin(record_batch_stream)))
+            }
+            FlightMessage::Metrics(s) => {
+                warn!("[DEBUG]receive metrics in database: {:?}", s);
+                Ok(Output::AffectedRows(0))
             }
         }
     }

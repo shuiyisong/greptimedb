@@ -83,6 +83,7 @@ impl FlightRecordBatchStream {
                 }
             }
         }
+        // make last package to pass metrics
     }
 }
 
