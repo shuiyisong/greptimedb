@@ -84,6 +84,8 @@ impl FlightRecordBatchStream {
             }
         }
         // make last package to pass metrics
+        let metrics = FlightMessage::Metrics("Alipay receives 1000 yuan".to_string());
+        let _ = tx.send(Ok(metrics)).await;
     }
 }
 
