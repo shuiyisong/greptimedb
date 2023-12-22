@@ -22,7 +22,7 @@ use datafusion::arrow::datatypes::SchemaRef as DfSchemaRef;
 use datafusion::error::Result as DfResult;
 use datafusion::parquet::arrow::async_reader::{AsyncFileReader, ParquetRecordBatchStream};
 use datafusion::physical_plan::metrics::BaselineMetrics;
-use datafusion::physical_plan::RecordBatchStream as DfRecordBatchStream;
+use datafusion::physical_plan::{ExecutionPlan, RecordBatchStream as DfRecordBatchStream};
 use datafusion_common::DataFusionError;
 use datatypes::schema::{Schema, SchemaRef};
 use futures::ready;
@@ -154,6 +154,13 @@ pub struct RecordBatchStreamAdapter {
     schema: SchemaRef,
     stream: DfSendableRecordBatchStream,
     metrics: Option<BaselineMetrics>,
+    metrics_2: Metrics,
+}
+
+enum Metrics {
+    Unavailable,
+    Unresolved(Arc<dyn ExecutionPlan>),
+    Resolved(String),
 }
 
 impl RecordBatchStreamAdapter {
@@ -164,6 +171,7 @@ impl RecordBatchStreamAdapter {
             schema,
             stream,
             metrics: None,
+            metrics_2: Metrics::Unavailable,
         })
     }
 
@@ -177,6 +185,22 @@ impl RecordBatchStreamAdapter {
             schema,
             stream,
             metrics: Some(metrics),
+            metrics_2: Metrics::Unavailable,
+        })
+    }
+
+    pub fn try_new_with_metrics_and_df_plan(
+        stream: DfSendableRecordBatchStream,
+        metrics: BaselineMetrics,
+        df_plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<Self> {
+        let schema =
+            Arc::new(Schema::try_from(stream.schema()).context(error::SchemaConversionSnafu)?);
+        Ok(Self {
+            schema,
+            stream,
+            metrics: Some(metrics),
+            metrics_2: Metrics::Unresolved(df_plan),
         })
     }
 }
@@ -184,6 +208,13 @@ impl RecordBatchStreamAdapter {
 impl RecordBatchStream for RecordBatchStreamAdapter {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+
+    fn metrics(&self) -> Option<String> {
+        match &self.metrics_2 {
+            Metrics::Resolved(metrics) => Some(metrics.clone()),
+            Metrics::Unavailable | Metrics::Unresolved(_) => None,
+        }
     }
 }
 
@@ -206,7 +237,15 @@ impl Stream for RecordBatchStreamAdapter {
                     df_record_batch,
                 )))
             }
-            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Ready(None) => {
+                match &self.metrics_2 {
+                    Metrics::Unresolved(df_plan) => {
+                        self.metrics_2 = Metrics::Resolved(format!("{:?}", df_plan.metrics()));
+                    }
+                    _ => {}
+                }
+                Poll::Ready(None)
+            }
         }
     }
 

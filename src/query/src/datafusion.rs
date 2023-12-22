@@ -415,6 +415,7 @@ impl QueryExecutor for DatafusionQueryEngine {
                     CoalescePartitionsExec::new(Arc::new(DfPhysicalPlanAdapter(plan.clone())));
                 // CoalescePartitionsExec must produce a single partition
                 assert_eq!(1, plan.output_partitioning().partition_count());
+                // TODO: add metric for this branch as well
                 let df_stream = plan
                     .execute(0, task_ctx)
                     .context(error::DatafusionSnafu)
