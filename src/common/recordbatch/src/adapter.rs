@@ -21,7 +21,7 @@ use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::SchemaRef as DfSchemaRef;
 use datafusion::error::Result as DfResult;
 use datafusion::parquet::arrow::async_reader::{AsyncFileReader, ParquetRecordBatchStream};
-use datafusion::physical_plan::metrics::BaselineMetrics;
+use datafusion::physical_plan::metrics::{BaselineMetrics, MetricsSet};
 use datafusion::physical_plan::{ExecutionPlan, RecordBatchStream as DfRecordBatchStream};
 use datafusion_common::DataFusionError;
 use datatypes::schema::{Schema, SchemaRef};
@@ -240,7 +240,10 @@ impl Stream for RecordBatchStreamAdapter {
             Poll::Ready(None) => {
                 match &self.metrics_2 {
                     Metrics::Unresolved(df_plan) => {
-                        self.metrics_2 = Metrics::Resolved(format!("{:?}", df_plan.metrics()));
+                        let mut metrics = vec![];
+                        // DFS, change to BFS later
+                        collect_metrics(&df_plan, &mut metrics);
+                        self.metrics_2 = Metrics::Resolved(format!("{:?}", metrics));
                     }
                     _ => {}
                 }
@@ -252,6 +255,16 @@ impl Stream for RecordBatchStreamAdapter {
     #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.stream.size_hint()
+    }
+}
+
+fn collect_metrics(df_plan: &Arc<dyn ExecutionPlan>, result: &mut Vec<MetricsSet>) {
+    if let Some(metrics) = df_plan.metrics() {
+        result.push(metrics);
+    }
+
+    for child in df_plan.children() {
+        collect_metrics(&child, result);
     }
 }
 
