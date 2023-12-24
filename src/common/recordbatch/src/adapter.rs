@@ -238,14 +238,11 @@ impl Stream for RecordBatchStreamAdapter {
                 )))
             }
             Poll::Ready(None) => {
-                match &self.metrics_2 {
-                    Metrics::Unresolved(df_plan) => {
-                        let mut metrics = vec![];
-                        // DFS, change to BFS later
-                        collect_metrics(&df_plan, &mut metrics);
-                        self.metrics_2 = Metrics::Resolved(format!("{:?}", metrics));
-                    }
-                    _ => {}
+                if let Metrics::Unresolved(df_plan) = &self.metrics_2 {
+                    let mut metrics = vec![];
+                    // DFS, change to BFS later
+                    collect_metrics(df_plan, &mut metrics);
+                    self.metrics_2 = Metrics::Resolved(format!("{:?}", metrics));
                 }
                 Poll::Ready(None)
             }
