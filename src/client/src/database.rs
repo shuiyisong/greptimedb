@@ -28,8 +28,8 @@ use common_grpc::flight::{FlightDecoder, FlightMessage};
 use common_query::Output;
 use common_recordbatch::error::ExternalSnafu;
 use common_recordbatch::RecordBatchStreamWrapper;
+use common_telemetry::logging;
 use common_telemetry::tracing_context::W3cTrace;
-use common_telemetry::{logging, warn};
 use futures_util::StreamExt;
 use prost::Message;
 use snafu::{ensure, ResultExt};
@@ -295,10 +295,12 @@ impl Database {
                 );
                 Ok(Output::AffectedRows(rows))
             }
-            FlightMessage::Recordbatch(_) => IllegalFlightMessagesSnafu {
-                reason: "The first flight message cannot be a RecordBatch message",
+            FlightMessage::Recordbatch(_) | FlightMessage::Metrics(_) => {
+                IllegalFlightMessagesSnafu {
+                    reason: "The first flight message cannot be a RecordBatch or Metrics message",
+                }
+                .fail()
             }
-            .fail(),
             FlightMessage::Schema(schema) => {
                 let stream = Box::pin(stream!({
                     while let Some(flight_message) = flight_message_stream.next().await {
@@ -321,10 +323,6 @@ impl Database {
                     output_ordering: None,
                 };
                 Ok(Output::Stream(Box::pin(record_batch_stream)))
-            }
-            FlightMessage::Metrics(s) => {
-                warn!("[DEBUG]receive metrics in database: {:?}", s);
-                Ok(Output::AffectedRows(0))
             }
         }
     }

@@ -55,10 +55,6 @@ impl MemoryUsageMetrics {
             self.end_time.record()
         }
     }
-
-    pub fn mem_used(&self) -> usize {
-        self.mem_used.value()
-    }
 }
 
 impl Drop for MemoryUsageMetrics {

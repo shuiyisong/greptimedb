@@ -21,8 +21,8 @@ use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::SchemaRef as DfSchemaRef;
 use datafusion::error::Result as DfResult;
 use datafusion::parquet::arrow::async_reader::{AsyncFileReader, ParquetRecordBatchStream};
-use datafusion::physical_plan::metrics::{BaselineMetrics, MetricsSet};
-use datafusion::physical_plan::{ExecutionPlan, RecordBatchStream as DfRecordBatchStream};
+use datafusion::physical_plan::metrics::{BaselineMetrics, MetricValue};
+use datafusion::physical_plan::{ExecutionPlan, Metric, RecordBatchStream as DfRecordBatchStream};
 use datafusion_common::DataFusionError;
 use datatypes::schema::{Schema, SchemaRef};
 use futures::ready;
@@ -175,6 +175,7 @@ impl RecordBatchStreamAdapter {
         })
     }
 
+    // TODO(shuiyisong): delete this one since it's not used anymore
     pub fn try_new_with_metrics(
         stream: DfSendableRecordBatchStream,
         metrics: BaselineMetrics,
@@ -255,9 +256,26 @@ impl Stream for RecordBatchStreamAdapter {
     }
 }
 
-fn collect_metrics(df_plan: &Arc<dyn ExecutionPlan>, result: &mut Vec<MetricsSet>) {
+fn collect_metrics(df_plan: &Arc<dyn ExecutionPlan>, result: &mut Vec<Arc<Metric>>) {
     if let Some(metrics) = df_plan.metrics() {
-        result.push(metrics);
+        let a = metrics
+            .iter()
+            .filter(|a| match a.value() {
+                MetricValue::OutputRows(c) => c.value() != 0,
+                MetricValue::ElapsedCompute(t) => t.value() != 0,
+                MetricValue::SpillCount(c) => c.value() != 0,
+                MetricValue::SpilledBytes(c) => c.value() != 0,
+                MetricValue::CurrentMemoryUsage(g) => g.value() != 0,
+                MetricValue::Count { name: _, count } => count.value() != 0,
+                MetricValue::Gauge { name: _, gauge } => gauge.value() != 0,
+                MetricValue::Time { name: _, time } => time.value() != 0,
+                MetricValue::StartTimestamp(t) => t.value().is_some(),
+                MetricValue::EndTimestamp(t) => t.value().is_some(),
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        result.extend(a);
     }
 
     for child in df_plan.children() {
