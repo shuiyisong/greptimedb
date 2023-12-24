@@ -269,8 +269,7 @@ fn collect_metrics(df_plan: &Arc<dyn ExecutionPlan>, result: &mut Vec<Arc<Metric
                 MetricValue::Count { name: _, count } => count.value() != 0,
                 MetricValue::Gauge { name: _, gauge } => gauge.value() != 0,
                 MetricValue::Time { name: _, time } => time.value() != 0,
-                MetricValue::StartTimestamp(t) => t.value().is_some(),
-                MetricValue::EndTimestamp(t) => t.value().is_some(),
+                MetricValue::StartTimestamp(_) | MetricValue::EndTimestamp(_) => false,
             })
             .cloned()
             .collect::<Vec<_>>();
