@@ -226,8 +226,8 @@ impl MergeScanExec {
                     let a = metrics.memory_usage;
                     let b = metrics.elapsed_compute;
                     let (c, s) = parse_catalog_and_schema_from_db_string(&dbname);
-                    read_meter!(c, s, cpu_time: a);
-                    read_meter!(c, s, table_scan: b);
+                    read_meter!(c, s, cpu_time: a as u64);
+                    read_meter!(c, s, table_scan: b as u64);
                 }
 
                 METRIC_MERGE_SCAN_POLL_ELAPSED.observe(poll_duration.as_secs_f64());
