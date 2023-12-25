@@ -1453,6 +1453,7 @@ name = "client"
 version = "0.4.4"
 dependencies = [
  "api",
+ "arc-swap",
  "arrow-flight",
  "async-stream",
  "async-trait",
@@ -1909,6 +1910,7 @@ dependencies = [
 name = "common-recordbatch"
 version = "0.4.4"
 dependencies = [
+ "arc-swap",
  "common-error",
  "common-macro",
  "datafusion",

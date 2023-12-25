@@ -12,8 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use api::v1::region::{QueryRequest, RegionRequest, RegionResponse};
 use api::v1::ResponseHeader;
+use arc_swap::ArcSwapOption;
 use arrow_flight::Ticket;
 use async_stream::stream;
 use async_trait::async_trait;
@@ -119,6 +122,9 @@ impl RegionRequester {
             .fail();
         };
 
+        let metrics_str = Arc::new(ArcSwapOption::from(None));
+        let ref_str = metrics_str.clone();
+
         let stream = Box::pin(stream!({
             while let Some(flight_message) = flight_message_stream.next().await {
                 let flight_message = flight_message
@@ -129,6 +135,7 @@ impl RegionRequester {
                     FlightMessage::Recordbatch(record_batch) => yield Ok(record_batch),
                     FlightMessage::Metrics(s) => {
                         warn!("[DEBUG]receive metrics in region: {:?}", s);
+                        ref_str.swap(Some(Arc::new(s)));
                         break;
                     }
                     _ => {
@@ -147,6 +154,7 @@ impl RegionRequester {
             schema,
             stream,
             output_ordering: None,
+            metrics: metrics_str,
         };
         Ok(Box::pin(record_batch_stream))
     }

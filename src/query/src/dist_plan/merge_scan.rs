@@ -27,8 +27,8 @@ use common_recordbatch::error::ExternalSnafu;
 use common_recordbatch::{
     DfSendableRecordBatchStream, RecordBatch, RecordBatchStreamWrapper, SendableRecordBatchStream,
 };
-use common_telemetry::tracing;
 use common_telemetry::tracing_context::TracingContext;
+use common_telemetry::{tracing, warn};
 use datafusion::physical_plan::metrics::{
     Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet, Time,
 };
@@ -213,6 +213,8 @@ impl MergeScanExec {
                     // reset poll timer
                     poll_timer = Instant::now();
                 }
+                warn!("[DEBUG]MergeScanExec: metrics={:?}", stream.metrics());
+
                 METRIC_MERGE_SCAN_POLL_ELAPSED.observe(poll_duration.as_secs_f64());
             }
         }));
@@ -221,6 +223,7 @@ impl MergeScanExec {
             schema: self.schema.clone(),
             stream,
             output_ordering: None,
+            metrics: Default::default(),
         }))
     }
 

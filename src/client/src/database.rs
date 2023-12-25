@@ -321,6 +321,7 @@ impl Database {
                     schema,
                     stream,
                     output_ordering: None,
+                    metrics: Default::default(),
                 };
                 Ok(Output::Stream(Box::pin(record_batch_stream)))
             }

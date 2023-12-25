@@ -22,7 +22,7 @@ use datafusion::arrow::datatypes::SchemaRef as DfSchemaRef;
 use datafusion::error::Result as DfResult;
 use datafusion::parquet::arrow::async_reader::{AsyncFileReader, ParquetRecordBatchStream};
 use datafusion::physical_plan::metrics::{BaselineMetrics, MetricValue};
-use datafusion::physical_plan::{ExecutionPlan, Metric, RecordBatchStream as DfRecordBatchStream};
+use datafusion::physical_plan::{ExecutionPlan, RecordBatchStream as DfRecordBatchStream};
 use datafusion_common::DataFusionError;
 use datatypes::schema::{Schema, SchemaRef};
 use futures::ready;
@@ -240,10 +240,10 @@ impl Stream for RecordBatchStreamAdapter {
             }
             Poll::Ready(None) => {
                 if let Metrics::Unresolved(df_plan) = &self.metrics_2 {
-                    let mut metrics = vec![];
-                    // DFS, change to BFS later
-                    collect_metrics(df_plan, &mut metrics);
-                    self.metrics_2 = Metrics::Resolved(format!("{:?}", metrics));
+                    let mut metrics_holder = RecordBatchMetrics::default();
+                    collect_metrics(df_plan, &mut metrics_holder);
+                    self.metrics_2 =
+                        Metrics::Resolved(serde_json::to_string(&metrics_holder).unwrap());
                 }
                 Poll::Ready(None)
             }
@@ -256,30 +256,24 @@ impl Stream for RecordBatchStreamAdapter {
     }
 }
 
-fn collect_metrics(df_plan: &Arc<dyn ExecutionPlan>, result: &mut Vec<Arc<Metric>>) {
+fn collect_metrics(df_plan: &Arc<dyn ExecutionPlan>, result: &mut RecordBatchMetrics) {
     if let Some(metrics) = df_plan.metrics() {
-        let a = metrics
-            .iter()
-            .filter(|a| match a.value() {
-                MetricValue::OutputRows(c) => c.value() != 0,
-                MetricValue::ElapsedCompute(t) => t.value() != 0,
-                MetricValue::SpillCount(c) => c.value() != 0,
-                MetricValue::SpilledBytes(c) => c.value() != 0,
-                MetricValue::CurrentMemoryUsage(g) => g.value() != 0,
-                MetricValue::Count { name: _, count } => count.value() != 0,
-                MetricValue::Gauge { name: _, gauge } => gauge.value() != 0,
-                MetricValue::Time { name: _, time } => time.value() != 0,
-                MetricValue::StartTimestamp(_) | MetricValue::EndTimestamp(_) => false,
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-
-        result.extend(a);
+        metrics.iter().for_each(|m| match m.value() {
+            MetricValue::ElapsedCompute(ec) => result.elapsed_compute += ec.value(),
+            MetricValue::CurrentMemoryUsage(m) => result.memory_usage += m.value(),
+            _ => {}
+        });
     }
 
     for child in df_plan.children() {
         collect_metrics(&child, result);
     }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+pub struct RecordBatchMetrics {
+    pub elapsed_compute: usize,
+    pub memory_usage: usize,
 }
 
 enum AsyncRecordBatchStreamAdapterState {
