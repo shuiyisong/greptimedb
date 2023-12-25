@@ -19,10 +19,11 @@ use std::time::Duration;
 use arrow_schema::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use async_stream::stream;
 use common_base::bytes::Bytes;
+use common_catalog::parse_catalog_and_schema_from_db_string;
 use common_error::ext::BoxedError;
 use common_meta::table_name::TableName;
 use common_query::physical_plan::TaskContext;
-use common_recordbatch::adapter::DfRecordBatchStreamAdapter;
+use common_recordbatch::adapter::{DfRecordBatchStreamAdapter, RecordBatchMetrics};
 use common_recordbatch::error::ExternalSnafu;
 use common_recordbatch::{
     DfSendableRecordBatchStream, RecordBatch, RecordBatchStreamWrapper, SendableRecordBatchStream,
@@ -39,6 +40,7 @@ use datafusion_physical_expr::PhysicalSortExpr;
 use datatypes::schema::{Schema, SchemaRef};
 use futures_util::StreamExt;
 use greptime_proto::v1::region::{QueryRequest, RegionRequestHeader};
+use meter_macros::read_meter;
 use snafu::ResultExt;
 use store_api::storage::RegionId;
 use tokio::time::Instant;
@@ -213,7 +215,20 @@ impl MergeScanExec {
                     // reset poll timer
                     poll_timer = Instant::now();
                 }
-                warn!("[DEBUG]MergeScanExec: metrics={:?}", stream.metrics());
+                if let Some(metrics) = stream
+                    .metrics()
+                    .and_then(|m| serde_json::from_str::<RecordBatchMetrics>(&m).ok())
+                {
+                    warn!(
+                        "[DEBUG]receive metrics for dbname:{:?} in region: {:?}",
+                        &dbname, metrics
+                    );
+                    let a = metrics.memory_usage;
+                    let b = metrics.elapsed_compute;
+                    let (c, s) = parse_catalog_and_schema_from_db_string(&dbname);
+                    read_meter!(c, s, cpu_time: a);
+                    read_meter!(c, s, table_scan: b);
+                }
 
                 METRIC_MERGE_SCAN_POLL_ELAPSED.observe(poll_duration.as_secs_f64());
             }

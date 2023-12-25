@@ -6862,6 +6862,7 @@ dependencies = [
  "greptime-proto",
  "humantime",
  "lazy_static",
+ "meter-macros",
  "num",
  "num-traits",
  "object-store",

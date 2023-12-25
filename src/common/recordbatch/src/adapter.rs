@@ -270,7 +270,7 @@ fn collect_metrics(df_plan: &Arc<dyn ExecutionPlan>, result: &mut RecordBatchMet
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Default, Debug)]
 pub struct RecordBatchMetrics {
     pub elapsed_compute: usize,
     pub memory_usage: usize,
