@@ -175,21 +175,6 @@ impl RecordBatchStreamAdapter {
         })
     }
 
-    // TODO(shuiyisong): delete this one since it's not used anymore
-    pub fn try_new_with_metrics(
-        stream: DfSendableRecordBatchStream,
-        metrics: BaselineMetrics,
-    ) -> Result<Self> {
-        let schema =
-            Arc::new(Schema::try_from(stream.schema()).context(error::SchemaConversionSnafu)?);
-        Ok(Self {
-            schema,
-            stream,
-            metrics: Some(metrics),
-            metrics_2: Metrics::Unavailable,
-        })
-    }
-
     pub fn try_new_with_metrics_and_df_plan(
         stream: DfSendableRecordBatchStream,
         metrics: BaselineMetrics,

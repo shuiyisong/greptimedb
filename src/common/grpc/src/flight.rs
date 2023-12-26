@@ -99,7 +99,9 @@ impl FlightEncoder {
             FlightMessage::Metrics(s) => {
                 let metadata = FlightMetadata {
                     affected_rows: None,
-                    metrics: Some(Metrics { metrics: s }),
+                    metrics: Some(Metrics {
+                        metrics: s.encode_to_vec(),
+                    }),
                 }
                 .encode_to_vec();
                 FlightData {
@@ -135,7 +137,9 @@ impl FlightDecoder {
                     return Ok(FlightMessage::AffectedRows(value as _));
                 }
                 if let Some(Metrics { metrics }) = metadata.metrics {
-                    return Ok(FlightMessage::Metrics(metrics));
+                    return Ok(FlightMessage::Metrics(
+                        String::from_utf8_lossy(&metrics).to_string(),
+                    ));
                 }
                 InvalidFlightDataSnafu {
                     reason: "Expecting FlightMetadata have some meaningful content.",
