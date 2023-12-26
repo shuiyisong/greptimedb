@@ -219,10 +219,6 @@ impl MergeScanExec {
                     .metrics()
                     .and_then(|m| serde_json::from_str::<RecordBatchMetrics>(&m).ok())
                 {
-                    warn!(
-                        "[DEBUG]receive metrics for dbname:{:?} in region: {:?}",
-                        &dbname, metrics
-                    );
                     let (c, s) = parse_catalog_and_schema_from_db_string(&dbname);
                     read_meter!(c, s, cpu_time: metrics.memory_usage as u64);
                     read_meter!(c, s, table_scan: metrics.elapsed_compute as u64);
