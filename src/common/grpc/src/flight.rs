@@ -100,7 +100,7 @@ impl FlightEncoder {
                 let metadata = FlightMetadata {
                     affected_rows: None,
                     metrics: Some(Metrics {
-                        metrics: s.encode_to_vec(),
+                        metrics: s.as_bytes().to_vec(),
                     }),
                 }
                 .encode_to_vec();
