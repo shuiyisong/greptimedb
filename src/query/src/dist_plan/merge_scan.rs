@@ -223,11 +223,9 @@ impl MergeScanExec {
                         "[DEBUG]receive metrics for dbname:{:?} in region: {:?}",
                         &dbname, metrics
                     );
-                    let a = metrics.memory_usage;
-                    let b = metrics.elapsed_compute;
                     let (c, s) = parse_catalog_and_schema_from_db_string(&dbname);
-                    read_meter!(c, s, cpu_time: a as u64);
-                    read_meter!(c, s, table_scan: b as u64);
+                    read_meter!(c, s, cpu_time: metrics.memory_usage as u64);
+                    read_meter!(c, s, table_scan: metrics.elapsed_compute as u64);
                 }
 
                 METRIC_MERGE_SCAN_POLL_ELAPSED.observe(poll_duration.as_secs_f64());

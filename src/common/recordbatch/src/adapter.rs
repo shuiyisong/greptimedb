@@ -227,8 +227,10 @@ impl Stream for RecordBatchStreamAdapter {
                 if let Metrics::Unresolved(df_plan) = &self.metrics_2 {
                     let mut metrics_holder = RecordBatchMetrics::default();
                     collect_metrics(df_plan, &mut metrics_holder);
-                    self.metrics_2 =
-                        Metrics::Resolved(serde_json::to_string(&metrics_holder).unwrap());
+                    if metrics_holder.elapsed_compute != 0 || metrics_holder.memory_usage != 0 {
+                        self.metrics_2 =
+                            Metrics::Resolved(serde_json::to_string(&metrics_holder).unwrap());
+                    }
                 }
                 Poll::Ready(None)
             }

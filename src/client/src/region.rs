@@ -27,7 +27,7 @@ use common_meta::datanode_manager::{AffectedRows, Datanode};
 use common_meta::error::{self as meta_error, Result as MetaResult};
 use common_recordbatch::error::ExternalSnafu;
 use common_recordbatch::{RecordBatchStreamWrapper, SendableRecordBatchStream};
-use common_telemetry::{error, warn};
+use common_telemetry::error;
 use prost::Message;
 use snafu::{location, Location, OptionExt, ResultExt};
 use tokio_stream::StreamExt;
@@ -134,7 +134,6 @@ impl RegionRequester {
                 match flight_message {
                     FlightMessage::Recordbatch(record_batch) => yield Ok(record_batch),
                     FlightMessage::Metrics(s) => {
-                        warn!("[DEBUG]receive metrics in region: {:?}", s);
                         ref_str.swap(Some(Arc::new(s)));
                         break;
                     }
