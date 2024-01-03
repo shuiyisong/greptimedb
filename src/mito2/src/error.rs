@@ -416,6 +416,30 @@ pub enum Error {
         error: ArrowError,
         location: Location,
     },
+
+    #[snafu(display("Invalid file metadata"))]
+    ConvertMetaData {
+        location: Location,
+        #[snafu(source)]
+        error: parquet::errors::ParquetError,
+    },
+
+    #[snafu(display("Column not found, column: {column}"))]
+    ColumnNotFound { column: String, location: Location },
+
+    #[snafu(display("Failed to build index applier"))]
+    BuildIndexApplier {
+        #[snafu(source)]
+        source: index::inverted_index::error::Error,
+        location: Location,
+    },
+
+    #[snafu(display("Failed to convert value"))]
+    ConvertValue {
+        #[snafu(source)]
+        source: datatypes::error::Error,
+        location: Location,
+    },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -461,6 +485,7 @@ impl ErrorExt for Error {
             | InvalidRequest { .. }
             | FillDefault { .. }
             | ConvertColumnDataType { .. }
+            | ColumnNotFound { .. }
             | InvalidMetadata { .. } => StatusCode::InvalidArguments,
             RegionMetadataNotFound { .. }
             | Join { .. }
@@ -477,6 +502,7 @@ impl ErrorExt for Error {
             InvalidBatch { .. } => StatusCode::InvalidArguments,
             InvalidRecordBatch { .. } => StatusCode::InvalidArguments,
             ConvertVector { source, .. } => source.status_code(),
+            ConvertMetaData { .. } => StatusCode::Internal,
             ComputeArrow { .. } => StatusCode::Internal,
             ComputeVector { .. } => StatusCode::Internal,
             PrimaryKeyLengthMismatch { .. } => StatusCode::InvalidArguments,
@@ -496,6 +522,8 @@ impl ErrorExt for Error {
             JsonOptions { .. } => StatusCode::InvalidArguments,
             EmptyRegionDir { .. } | EmptyManifestDir { .. } => StatusCode::RegionNotFound,
             ArrowReader { .. } => StatusCode::StorageUnavailable,
+            BuildIndexApplier { source, .. } => source.status_code(),
+            ConvertValue { source, .. } => source.status_code(),
         }
     }
 

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use api::v1::region::{QueryRequest, RegionRequest, RegionResponse};
@@ -20,21 +19,14 @@ use async_trait::async_trait;
 use client::region::check_response_header;
 use common_error::ext::BoxedError;
 use common_meta::datanode_manager::{AffectedRows, Datanode, DatanodeManager, DatanodeRef};
-use common_meta::ddl::{TableMetadata, TableMetadataAllocator, TableMetadataAllocatorContext};
-use common_meta::error::{self as meta_error, Result as MetaResult, UnsupportedSnafu};
+use common_meta::error::{self as meta_error, Result as MetaResult};
 use common_meta::peer::Peer;
-use common_meta::rpc::ddl::CreateTableTask;
-use common_meta::rpc::router::{Region, RegionRoute};
-use common_meta::sequence::SequenceRef;
-use common_meta::wal::options_allocator::allocate_region_wal_options;
-use common_meta::wal::WalOptionsAllocatorRef;
 use common_recordbatch::SendableRecordBatchStream;
+use common_telemetry::tracing;
 use common_telemetry::tracing_context::{FutureExt, TracingContext};
-use common_telemetry::{debug, info, tracing};
 use datanode::region_server::RegionServer;
 use servers::grpc::region_server::RegionServerHandler;
-use snafu::{ensure, OptionExt, ResultExt};
-use store_api::storage::{RegionId, TableId};
+use snafu::{OptionExt, ResultExt};
 
 use crate::error::{InvalidRegionRequestSnafu, InvokeRegionServerSnafu, Result};
 
@@ -103,102 +95,5 @@ impl Datanode for RegionInvoker {
             .await
             .map_err(BoxedError::new)
             .context(meta_error::ExternalSnafu)
-    }
-}
-
-pub struct StandaloneTableMetadataAllocator {
-    table_id_sequence: SequenceRef,
-    wal_options_allocator: WalOptionsAllocatorRef,
-}
-
-impl StandaloneTableMetadataAllocator {
-    pub fn new(
-        table_id_sequence: SequenceRef,
-        wal_options_allocator: WalOptionsAllocatorRef,
-    ) -> Self {
-        Self {
-            table_id_sequence,
-            wal_options_allocator,
-        }
-    }
-
-    async fn allocate_table_id(&self, task: &CreateTableTask) -> MetaResult<TableId> {
-        let table_id = if let Some(table_id) = &task.create_table.table_id {
-            let table_id = table_id.id;
-
-            ensure!(
-                !self
-                    .table_id_sequence
-                    .min_max()
-                    .await
-                    .contains(&(table_id as u64)),
-                UnsupportedSnafu {
-                    operation: format!(
-                        "create table by id {} that is reserved in this node",
-                        table_id
-                    )
-                }
-            );
-
-            info!(
-                "Received explicitly allocated table id {}, will use it directly.",
-                table_id
-            );
-
-            table_id
-        } else {
-            self.table_id_sequence.next().await? as TableId
-        };
-        Ok(table_id)
-    }
-}
-
-#[async_trait]
-impl TableMetadataAllocator for StandaloneTableMetadataAllocator {
-    async fn create(
-        &self,
-        _ctx: &TableMetadataAllocatorContext,
-        task: &CreateTableTask,
-    ) -> MetaResult<TableMetadata> {
-        let table_id = self.allocate_table_id(task).await?;
-
-        let region_routes = task
-            .partitions
-            .iter()
-            .enumerate()
-            .map(|(i, partition)| {
-                let region = Region {
-                    id: RegionId::new(table_id, i as u32),
-                    partition: Some(partition.clone().into()),
-                    ..Default::default()
-                };
-                // It's only a placeholder.
-                let peer = Peer::default();
-                RegionRoute {
-                    region,
-                    leader_peer: Some(peer),
-                    follower_peers: vec![],
-                    leader_status: None,
-                }
-            })
-            .collect::<Vec<_>>();
-
-        let region_numbers = region_routes
-            .iter()
-            .map(|route| route.region.id.region_number())
-            .collect();
-        let region_wal_options =
-            allocate_region_wal_options(region_numbers, &self.wal_options_allocator)?;
-
-        debug!(
-            "Allocated region wal options {:?} for table {}",
-            region_wal_options, table_id
-        );
-
-        Ok(TableMetadata {
-            table_id,
-            region_routes,
-            region_wal_options: HashMap::default(),
-        })
     }
 }

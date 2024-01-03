@@ -182,7 +182,6 @@ impl AlterTableProcedure {
 
     pub async fn submit_alter_region_requests(&mut self) -> Result<Status> {
         let table_id = self.data.table_id();
-        let table_ref = self.data.table_ref();
 
         let table_route = self
             .context
@@ -190,11 +189,9 @@ impl AlterTableProcedure {
             .table_route_manager()
             .get(table_id)
             .await?
-            .with_context(|| TableRouteNotFoundSnafu {
-                table_name: table_ref.to_string(),
-            })?
+            .context(TableRouteNotFoundSnafu { table_id })?
             .into_inner();
-        let region_routes = table_route.region_routes();
+        let region_routes = table_route.region_routes()?;
 
         let leaders = find_leaders(region_routes);
         let mut alter_region_tasks = Vec::with_capacity(leaders.len());

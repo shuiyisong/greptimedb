@@ -20,6 +20,7 @@ use api::v1::meta::heartbeat_server::HeartbeatServer;
 use api::v1::meta::lock_server::LockServer;
 use api::v1::meta::store_server::StoreServer;
 use common_base::Plugins;
+use common_meta::kv_backend::chroot::ChrootKvBackend;
 use common_meta::kv_backend::etcd::EtcdStore;
 use common_meta::kv_backend::memory::MemoryKvBackend;
 use common_meta::kv_backend::{KvBackendRef, ResettableKvBackendRef};
@@ -189,10 +190,31 @@ pub async fn metasrv_builder(
         ),
         (None, false) => {
             let etcd_client = create_etcd_client(opts).await?;
+            let kv_backend = {
+                let etcd_backend = EtcdStore::with_etcd_client(etcd_client.clone());
+                if !opts.store_key_prefix.is_empty() {
+                    Arc::new(ChrootKvBackend::new(
+                        opts.store_key_prefix.clone().into_bytes(),
+                        etcd_backend,
+                    ))
+                } else {
+                    etcd_backend
+                }
+            };
             (
-                EtcdStore::with_etcd_client(etcd_client.clone()),
-                Some(EtcdElection::with_etcd_client(&opts.server_addr, etcd_client.clone()).await?),
-                Some(EtcdLock::with_etcd_client(etcd_client)?),
+                kv_backend,
+                Some(
+                    EtcdElection::with_etcd_client(
+                        &opts.server_addr,
+                        etcd_client.clone(),
+                        opts.store_key_prefix.clone(),
+                    )
+                    .await?,
+                ),
+                Some(EtcdLock::with_etcd_client(
+                    etcd_client,
+                    opts.store_key_prefix.clone(),
+                )?),
             )
         }
     };

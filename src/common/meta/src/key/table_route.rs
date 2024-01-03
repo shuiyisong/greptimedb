@@ -16,11 +16,12 @@ use std::collections::HashMap;
 use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
-use store_api::storage::RegionId;
+use snafu::{ensure, ResultExt};
+use store_api::storage::{RegionId, RegionNumber};
 use table::metadata::TableId;
 
-use super::DeserializedValueWithBytes;
-use crate::error::Result;
+use super::{DeserializedValueWithBytes, TableMetaValue};
+use crate::error::{Result, SerdeJsonSnafu, UnexpectedLogicalRouteTableSnafu};
 use crate::key::{to_removed_key, RegionDistribution, TableMetaKey, TABLE_ROUTE_PREFIX};
 use crate::kv_backend::txn::{Compare, CompareOp, Txn, TxnOp, TxnOpResponse};
 use crate::kv_backend::KvBackendRef;
@@ -38,6 +39,7 @@ impl TableRouteKey {
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum TableRouteValue {
     Physical(PhysicalTableRouteValue),
     Logical(LogicalTableRouteValue),
@@ -55,45 +57,69 @@ pub struct LogicalTableRouteValue {
 }
 
 impl TableRouteValue {
-    pub fn new(region_routes: Vec<RegionRoute>) -> Self {
-        Self::Physical(PhysicalTableRouteValue {
-            region_routes,
-            version: 0,
-        })
+    pub fn physical(region_routes: Vec<RegionRoute>) -> Self {
+        Self::Physical(PhysicalTableRouteValue::new(region_routes))
     }
 
     /// Returns a new version [TableRouteValue] with `region_routes`.
-    pub fn update(&self, region_routes: Vec<RegionRoute>) -> Self {
+    pub fn update(&self, region_routes: Vec<RegionRoute>) -> Result<Self> {
+        ensure!(
+            self.is_physical(),
+            UnexpectedLogicalRouteTableSnafu {
+                err_msg: "{self:?} is a non-physical TableRouteValue.",
+            }
+        );
         let version = self.physical_table_route().version;
-        Self::Physical(PhysicalTableRouteValue {
+        Ok(Self::Physical(PhysicalTableRouteValue {
             region_routes,
             version: version + 1,
-        })
+        }))
     }
 
     /// Returns the version.
     ///
     /// For test purpose.
     #[cfg(any(test, feature = "testing"))]
-    pub fn version(&self) -> u64 {
-        self.physical_table_route().version
+    pub fn version(&self) -> Result<u64> {
+        ensure!(
+            self.is_physical(),
+            UnexpectedLogicalRouteTableSnafu {
+                err_msg: "{self:?} is a non-physical TableRouteValue.",
+            }
+        );
+        Ok(self.physical_table_route().version)
     }
 
     /// Returns the corresponding [RegionRoute].
-    pub fn region_route(&self, region_id: RegionId) -> Option<RegionRoute> {
-        self.physical_table_route()
+    pub fn region_route(&self, region_id: RegionId) -> Result<Option<RegionRoute>> {
+        ensure!(
+            self.is_physical(),
+            UnexpectedLogicalRouteTableSnafu {
+                err_msg: "{self:?} is a non-physical TableRouteValue.",
+            }
+        );
+        Ok(self
+            .physical_table_route()
             .region_routes
             .iter()
             .find(|route| route.region.id == region_id)
-            .cloned()
+            .cloned())
+    }
+
+    /// Returns true if it's [TableRouteValue::Physical].
+    pub fn is_physical(&self) -> bool {
+        matches!(self, TableRouteValue::Physical(_))
     }
 
     /// Gets the [RegionRoute]s of this [TableRouteValue::Physical].
-    ///
-    /// # Panics
-    /// The route type is not the [TableRouteValue::Physical].
-    pub fn region_routes(&self) -> &Vec<RegionRoute> {
-        &self.physical_table_route().region_routes
+    pub fn region_routes(&self) -> Result<&Vec<RegionRoute>> {
+        ensure!(
+            self.is_physical(),
+            UnexpectedLogicalRouteTableSnafu {
+                err_msg: "{self:?} is a non-physical TableRouteValue.",
+            }
+        );
+        Ok(&self.physical_table_route().region_routes)
     }
 
     fn physical_table_route(&self) -> &PhysicalTableRouteValue {
@@ -101,6 +127,59 @@ impl TableRouteValue {
             TableRouteValue::Physical(x) => x,
             _ => unreachable!("Mistakenly been treated as a Physical TableRoute: {self:?}"),
         }
+    }
+
+    pub fn region_numbers(&self) -> Vec<RegionNumber> {
+        match self {
+            TableRouteValue::Physical(x) => x
+                .region_routes
+                .iter()
+                .map(|region_route| region_route.region.id.region_number())
+                .collect::<Vec<_>>(),
+            TableRouteValue::Logical(x) => x
+                .region_ids()
+                .iter()
+                .map(|region_id| region_id.region_number())
+                .collect::<Vec<_>>(),
+        }
+    }
+}
+
+impl TableMetaValue for TableRouteValue {
+    fn try_from_raw_value(raw_value: &[u8]) -> Result<Self> {
+        let r = serde_json::from_slice::<TableRouteValue>(raw_value);
+        match r {
+            // Compatible with old TableRouteValue.
+            Err(e) if e.is_data() => Ok(Self::Physical(
+                serde_json::from_slice::<PhysicalTableRouteValue>(raw_value)
+                    .context(SerdeJsonSnafu)?,
+            )),
+            Ok(x) => Ok(x),
+            Err(e) => Err(e).context(SerdeJsonSnafu),
+        }
+    }
+
+    fn try_as_raw_value(&self) -> Result<Vec<u8>> {
+        serde_json::to_vec(self).context(SerdeJsonSnafu)
+    }
+}
+
+impl PhysicalTableRouteValue {
+    pub fn new(region_routes: Vec<RegionRoute>) -> Self {
+        Self {
+            region_routes,
+            version: 0,
+        }
+    }
+}
+
+impl LogicalTableRouteValue {
+    pub fn physical_table_id(&self) -> TableId {
+        todo!()
+    }
+
+    pub fn region_ids(&self) -> Vec<RegionId> {
+        todo!()
     }
 }
 
@@ -297,7 +376,24 @@ impl TableRouteManager {
     ) -> Result<Option<RegionDistribution>> {
         self.get(table_id)
             .await?
-            .map(|table_route| region_distribution(table_route.region_routes()))
+            .map(|table_route| region_distribution(table_route.region_routes()?))
             .transpose()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_table_route_compatibility() {
+        let old_raw_v = r#"{"region_routes":[{"region":{"id":1,"name":"r1","partition":null,"attrs":{}},"leader_peer":{"id":2,"addr":"a2"},"follower_peers":[]},{"region":{"id":1,"name":"r1","partition":null,"attrs":{}},"leader_peer":{"id":2,"addr":"a2"},"follower_peers":[]}],"version":0}"#;
+        let v = TableRouteValue::try_from_raw_value(old_raw_v.as_bytes()).unwrap();
+
+        let new_raw_v = format!("{:?}", v);
+        assert_eq!(
+            new_raw_v,
+            r#"Physical(PhysicalTableRouteValue { region_routes: [RegionRoute { region: Region { id: 1(0, 1), name: "r1", partition: None, attrs: {} }, leader_peer: Some(Peer { id: 2, addr: "a2" }), follower_peers: [], leader_status: None }, RegionRoute { region: Region { id: 1(0, 1), name: "r1", partition: None, attrs: {} }, leader_peer: Some(Peer { id: 2, addr: "a2" }), follower_peers: [], leader_status: None }], version: 0 })"#
+        );
     }
 }

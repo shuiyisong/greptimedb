@@ -18,7 +18,7 @@ use common_meta::peer::Peer;
 use common_meta::rpc::router::RegionRoute;
 use common_procedure::Status;
 use serde::{Deserialize, Serialize};
-use snafu::OptionExt;
+use snafu::{OptionExt, ResultExt};
 use store_api::storage::RegionId;
 
 use super::migration_end::RegionMigrationEnd;
@@ -52,7 +52,7 @@ impl State for RegionMigrationStart {
         let region_route = self.retrieve_region_route(ctx, region_id).await?;
         let to_peer = &ctx.persistent_ctx.to_peer;
 
-        if self.check_leader_region_on_peer(&region_route, to_peer)? {
+        if self.has_migrated(&region_route, to_peer)? {
             Ok((Box::new(RegionMigrationEnd), Status::Done))
         } else if self.check_candidate_region_on_peer(&region_route, to_peer) {
             Ok((Box::new(UpdateMetadata::Downgrade), Status::executing(true)))
@@ -85,6 +85,9 @@ impl RegionMigrationStart {
 
         let region_route = table_route
             .region_routes()
+            .context(error::UnexpectedLogicalRouteTableSnafu {
+                err_msg: "{self:?} is a non-physical TableRouteValue.",
+            })?
             .iter()
             .find(|route| route.region.id == region_id)
             .cloned()
@@ -109,16 +112,12 @@ impl RegionMigrationStart {
         region_opened
     }
 
-    /// Checks whether the leader region on region has been opened.
-    /// Returns true if it's been opened.
+    /// Checks whether the region has been migrated.
+    /// Returns true if it's.
     ///     
     /// Abort(non-retry):
     /// - Leader peer of RegionRoute is not found.
-    fn check_leader_region_on_peer(
-        &self,
-        region_route: &RegionRoute,
-        to_peer: &Peer,
-    ) -> Result<bool> {
+    fn has_migrated(&self, region_route: &RegionRoute, to_peer: &Peer) -> Result<bool> {
         let region_id = region_route.region.id;
 
         let region_opened = region_route
@@ -137,7 +136,6 @@ impl RegionMigrationStart {
 #[cfg(test)]
 mod tests {
     use std::assert_matches::assert_matches;
-    use std::collections::HashMap;
 
     use common_meta::key::test_utils::new_test_table_info;
     use common_meta::peer::Peer;
@@ -187,10 +185,8 @@ mod tests {
             ..Default::default()
         };
 
-        env.table_metadata_manager()
-            .create_table_metadata(table_info, vec![region_route], HashMap::default())
-            .await
-            .unwrap();
+        env.create_physical_table_metadata(table_info, vec![region_route])
+            .await;
 
         let err = state
             .retrieve_region_route(&mut ctx, RegionId::new(1024, 3))
@@ -221,10 +217,8 @@ mod tests {
             ..Default::default()
         }];
 
-        env.table_metadata_manager()
-            .create_table_metadata(table_info, region_routes, HashMap::default())
-            .await
-            .unwrap();
+        env.create_physical_table_metadata(table_info, region_routes)
+            .await;
 
         let (next, _) = state.next(&mut ctx).await.unwrap();
 
@@ -254,10 +248,8 @@ mod tests {
             ..Default::default()
         }];
 
-        env.table_metadata_manager()
-            .create_table_metadata(table_info, region_routes, HashMap::default())
-            .await
-            .unwrap();
+        env.create_physical_table_metadata(table_info, region_routes)
+            .await;
 
         let (next, _) = state.next(&mut ctx).await.unwrap();
 
@@ -281,10 +273,8 @@ mod tests {
             ..Default::default()
         }];
 
-        env.table_metadata_manager()
-            .create_table_metadata(table_info, region_routes, HashMap::default())
-            .await
-            .unwrap();
+        env.create_physical_table_metadata(table_info, region_routes)
+            .await;
 
         let (next, _) = state.next(&mut ctx).await.unwrap();
 

@@ -18,10 +18,12 @@ use std::{fs, path};
 use async_trait::async_trait;
 use clap::Parser;
 use common_catalog::consts::MIN_USER_TABLE_ID;
-use common_config::{metadata_store_dir, KvBackendConfig, WalConfig};
+use common_config::wal::StandaloneWalConfig;
+use common_config::{metadata_store_dir, KvBackendConfig};
 use common_meta::cache_invalidator::DummyCacheInvalidator;
 use common_meta::datanode_manager::DatanodeManagerRef;
-use common_meta::ddl::{DdlTaskExecutorRef, TableMetadataAllocatorRef};
+use common_meta::ddl::table_meta::TableMetadataAllocator;
+use common_meta::ddl::DdlTaskExecutorRef;
 use common_meta::ddl_manager::DdlManager;
 use common_meta::key::{TableMetadataManager, TableMetadataManagerRef};
 use common_meta::kv_backend::KvBackendRef;
@@ -31,12 +33,12 @@ use common_meta::wal::{WalOptionsAllocator, WalOptionsAllocatorRef};
 use common_procedure::ProcedureManagerRef;
 use common_telemetry::info;
 use common_telemetry::logging::LoggingOptions;
+use common_time::timezone::set_default_timezone;
 use datanode::config::{DatanodeOptions, ProcedureConfig, RegionEngineConfig, StorageConfig};
 use datanode::datanode::{Datanode, DatanodeBuilder};
 use file_engine::config::EngineConfig as FileEngineConfig;
 use frontend::frontend::FrontendOptions;
 use frontend::instance::builder::FrontendBuilder;
-use frontend::instance::standalone::StandaloneTableMetadataAllocator;
 use frontend::instance::{FrontendInstance, Instance as FeInstance, StandaloneDatanodeManager};
 use frontend::service_config::{
     GrpcOptions, InfluxdbOptions, MysqlOptions, OpentsdbOptions, PostgresOptions, PromStoreOptions,
@@ -50,8 +52,8 @@ use servers::Mode;
 use snafu::ResultExt;
 
 use crate::error::{
-    CreateDirSnafu, IllegalConfigSnafu, InitDdlManagerSnafu, InitMetadataSnafu, Result,
-    ShutdownDatanodeSnafu, ShutdownFrontendSnafu, StartDatanodeSnafu, StartFrontendSnafu,
+    CreateDirSnafu, IllegalConfigSnafu, InitDdlManagerSnafu, InitMetadataSnafu, InitTimezoneSnafu,
+    Result, ShutdownDatanodeSnafu, ShutdownFrontendSnafu, StartDatanodeSnafu, StartFrontendSnafu,
     StartProcedureManagerSnafu, StartWalOptionsAllocatorSnafu, StopProcedureManagerSnafu,
 };
 use crate::options::{CliOptions, MixOptions, Options};
@@ -97,6 +99,7 @@ impl SubCommand {
 pub struct StandaloneOptions {
     pub mode: Mode,
     pub enable_telemetry: bool,
+    pub default_timezone: Option<String>,
     pub http: HttpOptions,
     pub grpc: GrpcOptions,
     pub mysql: MysqlOptions,
@@ -104,7 +107,7 @@ pub struct StandaloneOptions {
     pub opentsdb: OpentsdbOptions,
     pub influxdb: InfluxdbOptions,
     pub prom_store: PromStoreOptions,
-    pub wal: WalConfig,
+    pub wal: StandaloneWalConfig,
     pub storage: StorageConfig,
     pub metadata_store: KvBackendConfig,
     pub procedure: ProcedureConfig,
@@ -120,6 +123,7 @@ impl Default for StandaloneOptions {
         Self {
             mode: Mode::Standalone,
             enable_telemetry: true,
+            default_timezone: None,
             http: HttpOptions::default(),
             grpc: GrpcOptions::default(),
             mysql: MysqlOptions::default(),
@@ -127,7 +131,7 @@ impl Default for StandaloneOptions {
             opentsdb: OpentsdbOptions::default(),
             influxdb: InfluxdbOptions::default(),
             prom_store: PromStoreOptions::default(),
-            wal: WalConfig::default(),
+            wal: StandaloneWalConfig::default(),
             storage: StorageConfig::default(),
             metadata_store: KvBackendConfig::default(),
             procedure: ProcedureConfig::default(),
@@ -146,6 +150,7 @@ impl StandaloneOptions {
     fn frontend_options(self) -> FrontendOptions {
         FrontendOptions {
             mode: self.mode,
+            default_timezone: self.default_timezone,
             http: self.http,
             grpc: self.grpc,
             mysql: self.mysql,
@@ -166,7 +171,7 @@ impl StandaloneOptions {
         DatanodeOptions {
             node_id: Some(0),
             enable_telemetry: self.enable_telemetry,
-            wal: self.wal,
+            wal: self.wal.into(),
             storage: self.storage,
             region_engine: self.region_engine,
             rpc_addr: self.grpc.addr,
@@ -338,7 +343,8 @@ impl StartCommand {
         let procedure = opts.procedure.clone();
         let frontend = opts.clone().frontend_options();
         let logging = opts.logging.clone();
-        let datanode = opts.datanode_options();
+        let wal_meta = opts.wal.clone().into();
+        let datanode = opts.datanode_options().clone();
 
         Ok(Options::Standalone(Box::new(MixOptions {
             procedure,
@@ -347,6 +353,7 @@ impl StartCommand {
             frontend,
             datanode,
             logging,
+            wal_meta,
         })))
     }
 
@@ -365,6 +372,9 @@ impl StartCommand {
         info!("Standalone start command: {:#?}", self);
 
         info!("Building standalone instance with {opts:#?}");
+
+        set_default_timezone(opts.frontend.default_timezone.as_deref())
+            .context(InitTimezoneSnafu)?;
 
         // Ensure the data_home directory exists.
         fs::create_dir_all(path::Path::new(&opts.data_home)).context(CreateDirSnafu {
@@ -392,15 +402,12 @@ impl StartCommand {
                 .step(10)
                 .build(),
         );
-        // TODO(niebayes): add a wal config into the MixOptions and pass it to the allocator builder.
         let wal_options_allocator = Arc::new(WalOptionsAllocator::new(
-            common_meta::wal::WalConfig::default(),
+            opts.wal_meta.clone(),
             kv_backend.clone(),
         ));
-        let table_meta_allocator = Arc::new(StandaloneTableMetadataAllocator::new(
-            table_id_sequence,
-            wal_options_allocator.clone(),
-        ));
+        let table_meta_allocator =
+            TableMetadataAllocator::new(table_id_sequence, wal_options_allocator.clone());
 
         let ddl_task_executor = Self::create_ddl_task_executor(
             kv_backend.clone(),
@@ -437,7 +444,7 @@ impl StartCommand {
         kv_backend: KvBackendRef,
         procedure_manager: ProcedureManagerRef,
         datanode_manager: DatanodeManagerRef,
-        table_meta_allocator: TableMetadataAllocatorRef,
+        table_meta_allocator: TableMetadataAllocator,
     ) -> Result<DdlTaskExecutorRef> {
         let table_metadata_manager =
             Self::create_table_metadata_manager(kv_backend.clone()).await?;
@@ -479,6 +486,7 @@ mod tests {
 
     use auth::{Identity, Password, UserProviderRef};
     use common_base::readable_size::ReadableSize;
+    use common_config::WalConfig;
     use common_test_util::temp_dir::create_named_temp_file;
     use datanode::config::{FileConfig, GcsConfig};
     use servers::Mode;
@@ -529,6 +537,7 @@ mod tests {
             purge_interval = "10m"
             read_batch_size = 128
             sync_write = false
+
             [storage]
             data_home = "/tmp/greptimedb/"
             type = "File"

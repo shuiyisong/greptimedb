@@ -21,14 +21,15 @@ use store_api::storage::{RegionNumber, TableId};
 use crate::cache_invalidator::CacheInvalidatorRef;
 use crate::datanode_manager::DatanodeManagerRef;
 use crate::error::Result;
+use crate::key::table_route::TableRouteValue;
 use crate::key::TableMetadataManagerRef;
 use crate::region_keeper::MemoryRegionKeeperRef;
-use crate::rpc::ddl::{CreateTableTask, SubmitDdlTaskRequest, SubmitDdlTaskResponse};
-use crate::rpc::router::RegionRoute;
+use crate::rpc::ddl::{SubmitDdlTaskRequest, SubmitDdlTaskResponse};
 
 pub mod alter_table;
 pub mod create_table;
 pub mod drop_table;
+pub mod table_meta;
 pub mod truncate_table;
 pub mod utils;
 
@@ -58,22 +59,11 @@ pub struct TableMetadata {
     /// Table id.
     pub table_id: TableId,
     /// Route information for each region of the table.
-    pub region_routes: Vec<RegionRoute>,
+    pub table_route: TableRouteValue,
     /// The encoded wal options for regions of the table.
     // If a region does not have an associated wal options, no key for the region would be found in the map.
     pub region_wal_options: HashMap<RegionNumber, String>,
 }
-
-#[async_trait::async_trait]
-pub trait TableMetadataAllocator: Send + Sync {
-    async fn create(
-        &self,
-        ctx: &TableMetadataAllocatorContext,
-        task: &CreateTableTask,
-    ) -> Result<TableMetadata>;
-}
-
-pub type TableMetadataAllocatorRef = Arc<dyn TableMetadataAllocator>;
 
 #[derive(Clone)]
 pub struct DdlContext {
