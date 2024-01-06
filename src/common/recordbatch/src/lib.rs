@@ -44,6 +44,8 @@ pub trait RecordBatchStream: Stream<Item = Result<RecordBatch>> {
     fn metrics(&self) -> Option<String> {
         None
     }
+
+    fn stream_name(&self) -> &str;
 }
 
 pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send>>;
@@ -71,6 +73,10 @@ impl EmptyRecordBatchStream {
 impl RecordBatchStream for EmptyRecordBatchStream {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+
+    fn stream_name(&self) -> &str {
+        "EmptyRecordBatchStream"
     }
 }
 
@@ -190,6 +196,10 @@ impl RecordBatchStream for SimpleRecordBatchStream {
     fn schema(&self) -> SchemaRef {
         self.inner.schema()
     }
+
+    fn stream_name(&self) -> &str {
+        "SimpleRecordBatchStream"
+    }
 }
 
 impl Stream for SimpleRecordBatchStream {
@@ -239,6 +249,10 @@ impl<S: Stream<Item = Result<RecordBatch>> + Unpin> RecordBatchStream
 
     fn metrics(&self) -> Option<String> {
         self.metrics.load().as_ref().map(|s| s.as_ref().clone())
+    }
+
+    fn stream_name(&self) -> &str {
+        "RecordBatchStreamWrapper"
     }
 }
 

@@ -83,6 +83,7 @@ impl FlightRecordBatchStream {
                 }
             }
         }
+        warn!("[DEBUG]stream name: {}", recordbatches.stream_name());
         // make last package to pass metrics
         if let Some(m) = recordbatches.metrics() {
             let metrics = FlightMessage::Metrics(m);

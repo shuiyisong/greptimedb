@@ -151,6 +151,10 @@ impl RecordBatchStream for FileToScanRegionStream {
     fn schema(&self) -> SchemaRef {
         self.scan_schema.clone()
     }
+
+    fn stream_name(&self) -> &str {
+        "FileToScanRegionStream"
+    }
 }
 
 impl Stream for FileToScanRegionStream {

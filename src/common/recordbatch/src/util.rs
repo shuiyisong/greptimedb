@@ -52,6 +52,10 @@ mod tests {
         fn schema(&self) -> SchemaRef {
             self.schema.clone()
         }
+
+        fn stream_name(&self) -> &str {
+            "MockRecordBatchStream"
+        }
     }
 
     impl Stream for MockRecordBatchStream {

@@ -165,6 +165,10 @@ impl RecordBatchStream for MemtableStream {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
+
+    fn stream_name(&self) -> &str {
+        "MemtableStream"
+    }
 }
 
 struct MemtableStream {

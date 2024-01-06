@@ -148,6 +148,10 @@ impl RecordBatchStream for StreamWithMetricWrapper {
     fn metrics(&self) -> Option<String> {
         self.stream.metrics()
     }
+
+    fn stream_name(&self) -> &str {
+        "StreamWithMetricWrapper"
+    }
 }
 
 #[cfg(test)]

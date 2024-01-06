@@ -247,6 +247,10 @@ impl RecordBatchStream for CoprStream {
         // FIXME(discord9): use copr returns for schema
         self.ret_schema.clone()
     }
+
+    fn stream_name(&self) -> &str {
+        "CoprStream"
+    }
 }
 
 impl Stream for CoprStream {
