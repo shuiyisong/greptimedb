@@ -410,9 +410,9 @@ impl QueryExecutor for DatafusionQueryEngine {
                 .map_err(BoxedError::new)
                 .context(QueryExecutionSnafu))?,
             _ => {
+                let df_plan = Arc::new(DfPhysicalPlanAdapter(plan.clone()));
                 // merge into a single partition
-                let plan =
-                    CoalescePartitionsExec::new(Arc::new(DfPhysicalPlanAdapter(plan.clone())));
+                let plan = CoalescePartitionsExec::new(df_plan.clone());
                 // CoalescePartitionsExec must produce a single partition
                 assert_eq!(1, plan.output_partitioning().partition_count());
                 // TODO: add metric for this branch as well
@@ -421,10 +421,11 @@ impl QueryExecutor for DatafusionQueryEngine {
                     .context(error::DatafusionSnafu)
                     .map_err(BoxedError::new)
                     .context(QueryExecutionSnafu)?;
-                let stream = RecordBatchStreamAdapter::try_new(df_stream)
+                let mut stream = RecordBatchStreamAdapter::try_new(df_stream)
                     .context(error::ConvertDfRecordBatchStreamSnafu)
                     .map_err(BoxedError::new)
                     .context(QueryExecutionSnafu)?;
+                stream.set_metrics2_with_df_plan(df_plan);
                 Ok(Box::pin(stream))
             }
         }

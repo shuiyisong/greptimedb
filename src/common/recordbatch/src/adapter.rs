@@ -189,6 +189,10 @@ impl RecordBatchStreamAdapter {
             metrics_2: Metrics::Unresolved(df_plan),
         })
     }
+
+    pub fn set_metrics2_with_df_plan(&mut self, plan: Arc<dyn ExecutionPlan>) {
+        self.metrics_2 = Metrics::Unresolved(plan)
+    }
 }
 
 impl RecordBatchStream for RecordBatchStreamAdapter {
