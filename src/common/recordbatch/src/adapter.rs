@@ -206,10 +206,6 @@ impl RecordBatchStream for RecordBatchStreamAdapter {
             Metrics::Unavailable | Metrics::Unresolved(_) => None,
         }
     }
-
-    fn stream_name(&self) -> &str {
-        "RecordBatchStreamAdapter"
-    }
 }
 
 impl Stream for RecordBatchStreamAdapter {
@@ -299,10 +295,6 @@ impl RecordBatchStream for AsyncRecordBatchStreamAdapter {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
-
-    fn stream_name(&self) -> &str {
-        "AsyncRecordBatchStreamAdapter"
-    }
 }
 
 impl Stream for AsyncRecordBatchStreamAdapter {
@@ -361,10 +353,6 @@ mod test {
         impl RecordBatchStream for MaybeErrorRecordBatchStream {
             fn schema(&self) -> SchemaRef {
                 unimplemented!()
-            }
-
-            fn stream_name(&self) -> &str {
-                "MaybeErrorRecordBatchStream"
             }
         }
 

@@ -123,10 +123,6 @@ impl RecordBatchStream for NumbersStream {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
-
-    fn stream_name(&self) -> &str {
-        "NumbersStream"
-    }
 }
 
 impl Stream for NumbersStream {
