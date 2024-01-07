@@ -220,8 +220,13 @@ impl MergeScanExec {
                     .and_then(|m| serde_json::from_str::<RecordBatchMetrics>(&m).ok())
                 {
                     let (c, s) = parse_catalog_and_schema_from_db_string(&dbname);
-                    read_meter!(c, s, cpu_time: metrics.memory_usage as u64);
-                    read_meter!(c, s, table_scan: metrics.elapsed_compute as u64);
+                    read_meter!(
+                        c,
+                        s,
+                        metrics.elapsed_compute as u64,
+                        metrics.memory_usage as u64,
+                        0
+                    );
                 }
 
                 METRIC_MERGE_SCAN_POLL_ELAPSED.observe(poll_duration.as_secs_f64());

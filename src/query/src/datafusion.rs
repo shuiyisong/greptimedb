@@ -415,7 +415,6 @@ impl QueryExecutor for DatafusionQueryEngine {
                 let plan = CoalescePartitionsExec::new(df_plan.clone());
                 // CoalescePartitionsExec must produce a single partition
                 assert_eq!(1, plan.output_partitioning().partition_count());
-                // TODO: add metric for this branch as well
                 let df_stream = plan
                     .execute(0, task_ctx)
                     .context(error::DatafusionSnafu)
@@ -425,7 +424,7 @@ impl QueryExecutor for DatafusionQueryEngine {
                     .context(error::ConvertDfRecordBatchStreamSnafu)
                     .map_err(BoxedError::new)
                     .context(QueryExecutionSnafu)?;
-                stream.set_metrics2_with_df_plan(df_plan);
+                stream.set_metrics2(df_plan);
                 Ok(Box::pin(stream))
             }
         }

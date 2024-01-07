@@ -190,7 +190,7 @@ impl RecordBatchStreamAdapter {
         })
     }
 
-    pub fn set_metrics2_with_df_plan(&mut self, plan: Arc<dyn ExecutionPlan>) {
+    pub fn set_metrics2(&mut self, plan: Arc<dyn ExecutionPlan>) {
         self.metrics_2 = Metrics::Unresolved(plan)
     }
 }
@@ -265,9 +265,13 @@ fn collect_metrics(df_plan: &Arc<dyn ExecutionPlan>, result: &mut RecordBatchMet
     }
 }
 
+/// [`RecordBatchMetrics`] carrys metrics value
+/// from datanode to frontend through gRPC
 #[derive(serde::Serialize, serde::Deserialize, Default, Debug)]
 pub struct RecordBatchMetrics {
+    // cpu comsumption in nanoseconds
     pub elapsed_compute: usize,
+    // memory used by the plan in bytes
     pub memory_usage: usize,
 }
 
