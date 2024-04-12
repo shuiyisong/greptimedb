@@ -357,7 +357,12 @@ impl ErrorExt for Error {
             },
             MissingTimestampColumn { .. } => StatusCode::EngineExecuteQuery,
             Sql { source, .. } => source.status_code(),
-            PlanSql { .. } => StatusCode::PlanQuery,
+            PlanSql { error, .. } => match error {
+                DataFusionError::Plan(str) if str.starts_with("Table not found") => {
+                    StatusCode::TableNotFound
+                }
+                _ => StatusCode::PlanQuery,
+            },
             ConvertSqlType { source, .. } | ConvertSqlValue { source, .. } => source.status_code(),
 
             RegionQuery { source, .. } => source.status_code(),
