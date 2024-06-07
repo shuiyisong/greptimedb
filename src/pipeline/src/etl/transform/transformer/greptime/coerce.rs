@@ -123,6 +123,7 @@ fn coerce_type(transform: &Transform) -> Result<ColumnDataType, String> {
 }
 
 pub(crate) fn coerce_value(
+    key: &str,
     val: &Value,
     transform: &Transform,
 ) -> Result<Option<ValueData>, String> {
@@ -143,7 +144,12 @@ pub(crate) fn coerce_value(
         Value::Float64(n) => coerce_f64_value(*n, transform),
 
         Value::Boolean(b) => coerce_bool_value(*b, transform),
-        Value::String(s) => coerce_string_value(s, transform),
+        Value::String(s) => coerce_string_value(s, transform).map_err(|e| {
+            format!(
+                "faild to parse {} with key: {} to {}, error: {}",
+                s, key, transform.type_, e
+            )
+        }),
 
         Value::Time(Time { nanosecond, .. }) => {
             Ok(Some(ValueData::TimestampNanosecondValue(*nanosecond)))

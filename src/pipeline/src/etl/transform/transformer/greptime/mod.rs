@@ -63,10 +63,11 @@ impl GreptimeTransformer {
 
         for transform in self.transforms.iter() {
             for field in transform.fields.iter() {
-                let value_data = match map.get(field.get_field()) {
-                    Some(val) => coerce_value(val, transform)?,
+                let key = field.get_field();
+                let value_data = match map.get(key) {
+                    Some(val) => coerce_value(key, val, transform)?,
                     None if transform.get_default().is_some() => {
-                        coerce_value(transform.get_default().unwrap(), transform)?
+                        coerce_value(key, transform.get_default().unwrap(), transform)?
                     }
                     None => None,
                 };

@@ -76,9 +76,14 @@ impl EpochProcessor {
         self.ignore_missing = ignore_missing;
     }
 
-    fn parse(&self, val: &Value) -> Result<Epoch, String> {
+    fn parse(&self, key: &str, val: &Value) -> Result<Epoch, String> {
         let t: i64 = match val {
-            Value::String(s) => s.parse::<i64>().map_err(|e| e.to_string())?,
+            Value::String(s) => s.parse::<i64>().map_err(|e| {
+                format!(
+                    "parse i64 from string failed.{}, key:{}, field{}",
+                    e, key, s
+                )
+            })?,
             Value::Int16(i) => *i as i64,
             Value::Int32(i) => *i as i64,
             Value::Int64(i) => *i,
@@ -124,7 +129,7 @@ impl EpochProcessor {
             None => field.get_field(),
         };
 
-        Ok(Map::one(key, Value::Epoch(self.parse(val)?)))
+        Ok(Map::one(key, Value::Epoch(self.parse(key, val)?)))
     }
 }
 
@@ -198,7 +203,7 @@ mod tests {
         ];
 
         for value in values {
-            let parsed = processor.parse(&value).unwrap();
+            let parsed = processor.parse("test", &value).unwrap();
             assert_eq!(parsed, super::Epoch::Second(1573840000));
         }
     }
