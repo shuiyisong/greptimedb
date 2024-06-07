@@ -111,7 +111,17 @@ pub async fn log_ingester(
         _ => UnsupportedContentTypeSnafu { content_type }.fail()?,
     };
 
-    log_ingester_inner(handler, pipeline_name, table_name, value, query_ctx).await
+    match log_ingester_inner(handler, pipeline_name, table_name, value, query_ctx).await {
+        Ok(response) => Ok(response),
+        Err(e) => {
+            error!(e; "[log_other_err]: failed to insert log");
+            Ok(HttpResponse::GreptimedbV1(GreptimedbV1Response {
+                output: vec![],
+                execution_time_ms: 0,
+                resp_metrics: HashMap::new(),
+            }))
+        }
+    }
 }
 
 fn parse_space_separated_log(payload: String) -> Result<Value> {
@@ -128,6 +138,7 @@ async fn log_ingester_inner(
     payload: Value,
     query_ctx: QueryContextRef,
 ) -> Result<HttpResponse> {
+    let start = std::time::Instant::now();
     let pipeline_data = PipelineValue::try_from(payload)
         .map_err(|reason| CastTypeSnafu { msg: reason }.build())
         .context(PipelineSnafu)?;
@@ -147,11 +158,21 @@ async fn log_ingester_inner(
     let insert_requests = RowInsertRequests {
         inserts: vec![insert_request],
     };
-    state.insert_log(insert_requests, query_ctx).await.map(|_| {
-        HttpResponse::GreptimedbV1(GreptimedbV1Response {
-            output: vec![],
-            execution_time_ms: 0,
-            resp_metrics: HashMap::new(),
-        })
-    })
+    let output = state.insert_log(insert_requests, query_ctx).await;
+    match output {
+        Ok(_) => Ok(GreptimedbV1Response::from_output(vec![output])
+            .await
+            .with_execution_time(start.elapsed().as_millis() as u64)),
+        Err(e) => {
+            error!(e; "[log_insert_err]: failed to insert log in storage engine.");
+            Ok(HttpResponse::GreptimedbV1(GreptimedbV1Response {
+                output: vec![],
+                execution_time_ms: 0,
+                resp_metrics: HashMap::new(),
+            }))
+        }
+    }
+    // Ok(GreptimedbV1Response::from_output(vec![output])
+    //     .await
+    //     .with_execution_time(start.elapsed().as_millis() as u64))
 }
