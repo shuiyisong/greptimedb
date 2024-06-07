@@ -146,7 +146,7 @@ pub(crate) fn coerce_value(
         Value::Boolean(b) => coerce_bool_value(*b, transform),
         Value::String(s) => coerce_string_value(s, transform).map_err(|e| {
             format!(
-                "faild to parse {} with key: {} to {}, error: {}",
+                "failed to parse {} with key: {} to {}, error: {}",
                 s, key, transform.type_, e
             )
         }),
