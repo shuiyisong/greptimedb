@@ -82,13 +82,15 @@ pub async fn log_ingester(
     // TODO(shuiyisong): remove debug log
     info!("[log_header]: {:?}", headers);
     info!("[log_payload]: {:?}", payload);
-    if payload == "{\"access_validation\":true}" {
+
+    if payload == "{\"access_validation\":true}" || payload == "0,access_validation" {
         return Ok(HttpResponse::GreptimedbV1(GreptimedbV1Response {
             output: vec![],
             execution_time_ms: 0,
             resp_metrics: HashMap::new(),
         }));
     }
+
     let content_type = headers
         .typed_get::<ContentType>()
         .unwrap_or(ContentType::text());
