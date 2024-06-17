@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ESTIMATED_META_SIZE","MIN_BATCH_SIZE","VERSION"],"enum":["RecordType"],"fn":["convert_to_multiple_entry","convert_to_naive_entry","convert_to_records","maybe_emit_entry","remaining_entries"],"struct":["Record","RecordMeta","RecordProducer"]};
