@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::result::Result as StdResult;
 
 use api::v1::{RowInsertRequest, RowInsertRequests, Rows};
@@ -21,10 +22,12 @@ use axum::headers::ContentType;
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{Request, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::{async_trait, BoxError, Extension, TypedHeader};
-use common_telemetry::{error, warn};
+use axum::{async_trait, BoxError, Extension};
+use common_telemetry::{error, info, warn};
 use common_time::Timestamp;
 use datatypes::timestamp::TimestampNanosecond;
+use headers::HeaderMapExt;
+use http::HeaderMap;
 use mime_guess::mime;
 use pipeline::error::{CastTypeSnafu, PipelineTransformSnafu};
 use pipeline::table::PipelineVersion;
@@ -174,9 +177,26 @@ pub async fn log_ingester(
     State(handler): State<LogHandlerRef>,
     Query(query_params): Query<LogIngesterQueryParams>,
     Extension(query_ctx): Extension<QueryContextRef>,
-    TypedHeader(content_type): TypedHeader<ContentType>,
+    headers: HeaderMap,
+    // TypedHeader(content_type): TypedHeader<ContentType>,
     payload: String,
 ) -> Result<HttpResponse> {
+    // TODO(shuiyisong): remove debug log
+    info!("[log_header]: {:?}", headers);
+    info!("[log_payload]: {:?}", payload);
+
+    if payload == "{\"access_validation\":true}" || payload == "0,access_validation" {
+        return Ok(HttpResponse::GreptimedbV1(GreptimedbV1Response {
+            output: vec![],
+            execution_time_ms: 0,
+            resp_metrics: HashMap::new(),
+        }));
+    }
+
+    let content_type = headers
+        .typed_get::<ContentType>()
+        .unwrap_or(ContentType::json());
+
     let pipeline_name = query_params.pipeline_name.context(InvalidParameterSnafu {
         reason: "pipeline_name is required",
     })?;
