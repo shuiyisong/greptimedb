@@ -143,12 +143,6 @@ impl Field {
         self.input_field.index = index;
     }
 
-    pub(crate) fn set_output_index(&mut self, key: &str, index: usize) {
-        if let Some(v) = self.output_fields_index_mapping.get_mut(key) {
-            *v = index;
-        }
-    }
-
     pub(crate) fn insert_output_index(&mut self, key: String, index: usize) {
         self.output_fields_index_mapping.insert(key, index);
     }

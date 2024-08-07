@@ -138,7 +138,7 @@ pub struct Processors {
     /// all required keys in all processors
     pub required_keys: Vec<String>,
     /// all required keys in user-supplied data, not pipeline output fields
-    pub required_original_keys: Vec<String>,
+    pub required_input_keys: Vec<String>,
     /// all output keys in all processors
     pub output_keys: Vec<String>,
 }
@@ -169,8 +169,8 @@ impl Processors {
     }
 
     /// Required fields in user-supplied data, not pipeline output fields.
-    pub fn required_original_keys(&self) -> &Vec<String> {
-        &self.required_original_keys
+    pub fn required_input_keys(&self) -> &Vec<String> {
+        &self.required_input_keys
     }
 }
 
@@ -181,7 +181,7 @@ impl TryFrom<&Vec<yaml_rust::Yaml>> for Processors {
         let mut processors = vec![];
         let mut all_output_keys = HashSet::with_capacity(50);
         let mut all_required_keys = HashSet::with_capacity(50);
-        let mut all_required_original_keys = HashSet::with_capacity(50);
+        let mut all_required_input_keys = HashSet::with_capacity(50);
         for doc in vec {
             let processor = parse_processor(doc)?;
 
@@ -194,7 +194,7 @@ impl TryFrom<&Vec<yaml_rust::Yaml>> for Processors {
 
             for key in &processor_required_keys {
                 if !all_output_keys.contains(key) {
-                    all_required_original_keys.insert(key.clone());
+                    all_required_input_keys.insert(key.clone());
                 }
             }
 
@@ -206,15 +206,15 @@ impl TryFrom<&Vec<yaml_rust::Yaml>> for Processors {
             processors.push(processor);
         }
 
-        let all_required_keys = all_required_keys.into_iter().sorted().collect();
-        let all_output_keys = all_output_keys.into_iter().sorted().collect();
-        let all_required_original_keys = all_required_original_keys.into_iter().sorted().collect();
+        let required_keys = all_required_keys.into_iter().sorted().collect();
+        let output_keys = all_output_keys.into_iter().sorted().collect();
+        let required_input_keys = all_required_input_keys.into_iter().sorted().collect();
 
         Ok(Processors {
             processors,
-            required_keys: all_required_keys,
-            output_keys: all_output_keys,
-            required_original_keys: all_required_original_keys,
+            required_keys,
+            output_keys,
+            required_input_keys,
         })
     }
 }
