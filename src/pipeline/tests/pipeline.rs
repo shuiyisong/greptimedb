@@ -414,10 +414,12 @@ transform:
         ("breadcrumbs_cloud_wrapper_turn_around_time", None),
         ("breadcrumbs_cloud_wrapper_dns_lookup_time", None),
         ("breadcrumbs_cloud_wrapper_asn", None),
-    ]
-    .into_iter()
-    .map(|(_, d)| GreptimeValue { value_data: d })
-    .collect::<Vec<GreptimeValue>>();
+    ];
+    // expected_values.sort_by_key(|x| x.0);
+    let expected_values = expected_values
+        .into_iter()
+        .map(|(_, d)| GreptimeValue { value_data: d })
+        .collect::<Vec<GreptimeValue>>();
 
     let yaml_content = Content::Yaml(pipeline_yaml.into());
     let pipeline: Pipeline<GreptimeTransformer> =
