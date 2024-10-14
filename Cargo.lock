@@ -10652,6 +10652,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_json5"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32a6b754515e1a7bd79fc2edeaecee526fc80cb3a918607e5ca149225a3a9586"
+dependencies = [
+ "pest",
+ "pest_derive",
+ "serde",
+]
+
+[[package]]
 name = "serde_path_to_error"
 version = "0.1.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10836,6 +10847,7 @@ dependencies = [
  "script",
  "serde",
  "serde_json",
+ "serde_json5",
  "session",
  "snafu 0.8.5",
  "snap",

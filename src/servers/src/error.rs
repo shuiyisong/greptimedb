@@ -490,6 +490,14 @@ pub enum Error {
         location: Location,
     },
 
+    #[snafu(display("Failed to parse payload as json"))]
+    ParseJson5 {
+        #[snafu(source)]
+        error: serde_json5::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+
     #[snafu(display("Unsupported content type: {:?}", content_type))]
     UnsupportedContentType {
         content_type: ContentType,
@@ -601,6 +609,7 @@ impl ErrorExt for Error {
             | MissingQueryContext { .. }
             | MysqlValueConversion { .. }
             | ParseJson { .. }
+            | ParseJson5 { .. }
             | UnsupportedContentType { .. }
             | TimestampOverflow { .. }
             | OpenTelemetryLog { .. } => StatusCode::InvalidArguments,

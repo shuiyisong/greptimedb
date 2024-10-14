@@ -92,6 +92,7 @@ rustls-pki-types = "1.0"
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_json5 = "0.1"
 session.workspace = true
 snafu.workspace = true
 snap = "1"
