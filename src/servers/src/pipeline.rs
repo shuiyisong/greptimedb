@@ -24,7 +24,7 @@ use pipeline::{
 use session::context::QueryContextRef;
 use snafu::ResultExt;
 
-use crate::error::{CatalogSnafu, PipelineSnafu, Result};
+use crate::error::{CatalogSnafu, JoinTaskSnafu, PipelineSnafu, Result};
 use crate::metrics::{
     METRIC_FAILURE_VALUE, METRIC_HTTP_LOGS_TRANSFORM_ELAPSED, METRIC_SUCCESS_VALUE,
 };
@@ -116,7 +116,7 @@ async fn run_custom_pipeline(
     query_ctx: &QueryContextRef,
     is_top_level: bool,
 ) -> Result<Vec<RowInsertRequest>> {
-    let db = query_ctx.get_db_string();
+    let db = Arc::new(query_ctx.get_db_string());
     let pipeline = get_pipeline(pipeline_definition, handler, query_ctx).await?;
 
     let transform_timer = std::time::Instant::now();
@@ -125,16 +125,29 @@ async fn run_custom_pipeline(
     let mut req_map = HashMap::new();
     let mut dispatched: BTreeMap<DispatchedTo, Vec<PipelineMap>> = BTreeMap::new();
 
+    let mut handles = Vec::new();
     for mut values in data_array {
-        let r = pipeline
-            .exec_mut(&mut values)
-            .inspect_err(|_| {
-                METRIC_HTTP_LOGS_TRANSFORM_ELAPSED
-                    .with_label_values(&[db.as_str(), METRIC_FAILURE_VALUE])
-                    .observe(transform_timer.elapsed().as_secs_f64());
-            })
-            .context(PipelineSnafu)?;
+        let pipeline = pipeline.clone();
+        let db = db.clone();
+        let handler = common_runtime::spawn_global(async move {
+            pipeline
+                .exec_mut(&mut values)
+                .inspect_err(|_| {
+                    METRIC_HTTP_LOGS_TRANSFORM_ELAPSED
+                        .with_label_values(&[db.as_str(), METRIC_FAILURE_VALUE])
+                        .observe(transform_timer.elapsed().as_secs_f64());
+                })
+                .map(|r| (r, values))
+                .context(PipelineSnafu)
+        });
+        handles.push(handler);
+    }
 
+    let res = futures_util::future::try_join_all(handles)
+        .await
+        .context(JoinTaskSnafu)?;
+    for r in res {
+        let (r, values) = r?;
         match r {
             PipelineExecOutput::Transformed((row, table_suffix)) => {
                 let act_table_name = match table_suffix {
