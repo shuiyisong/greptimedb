@@ -132,10 +132,11 @@ impl DispatchedTo {
 #[derive(Debug)]
 pub enum PipelineExecOutput {
     Transformed((Row, Option<String>)),
-    DispatchedTo(DispatchedTo),
+    DispatchedTo(DispatchedTo, PipelineMap),
 }
 
 impl PipelineExecOutput {
+    // note: this method is only used in tests
     pub fn into_transformed(self) -> Option<(Row, Option<String>)> {
         if let Self::Transformed(o) = self {
             Some(o)
@@ -144,8 +145,9 @@ impl PipelineExecOutput {
         }
     }
 
+    // note: this method is only used in tests
     pub fn into_dispatched(self) -> Option<DispatchedTo> {
-        if let Self::DispatchedTo(d) = self {
+        if let Self::DispatchedTo(d, _) = self {
             Some(d)
         } else {
             None
@@ -171,22 +173,22 @@ pub fn json_array_to_map(val: Vec<serde_json::Value>) -> Result<Vec<PipelineMap>
 }
 
 impl Pipeline {
-    pub fn exec_mut(&self, val: &mut PipelineMap) -> Result<PipelineExecOutput> {
+    pub fn exec_mut(&self, mut val: PipelineMap) -> Result<PipelineExecOutput> {
         // process
         for processor in self.processors.iter() {
-            processor.exec_mut(val)?;
+            processor.exec_mut(&mut val)?;
         }
 
         // dispatch, fast return if matched
-        if let Some(rule) = self.dispatcher.as_ref().and_then(|d| d.exec(val)) {
-            return Ok(PipelineExecOutput::DispatchedTo(rule.into()));
+        if let Some(rule) = self.dispatcher.as_ref().and_then(|d| d.exec(&val)) {
+            return Ok(PipelineExecOutput::DispatchedTo(rule.into(), val));
         }
+
+        // generate table name first
+        let table_suffix = self.tablesuffix.as_ref().and_then(|t| t.apply(&val));
 
         // transform
         let row = self.transformer.transform_mut(val)?;
-
-        // generate table name
-        let table_suffix = self.tablesuffix.as_ref().and_then(|t| t.apply(val));
 
         Ok(PipelineExecOutput::Transformed((row, table_suffix)))
     }
@@ -241,9 +243,9 @@ transform:
       type: uint32
     "#;
         let pipeline: Pipeline = parse(&Content::Yaml(pipeline_yaml)).unwrap();
-        let mut payload = json_to_map(input_value).unwrap();
+        let payload = json_to_map(input_value).unwrap();
         let result = pipeline
-            .exec_mut(&mut payload)
+            .exec_mut(payload)
             .unwrap()
             .into_transformed()
             .unwrap();
@@ -294,7 +296,7 @@ transform:
         let mut payload = PipelineMap::new();
         payload.insert("message".to_string(), Value::String(message));
         let result = pipeline
-            .exec_mut(&mut payload)
+            .exec_mut(payload)
             .unwrap()
             .into_transformed()
             .unwrap();
@@ -369,9 +371,9 @@ transform:
     "#;
 
         let pipeline: Pipeline = parse(&Content::Yaml(pipeline_yaml)).unwrap();
-        let mut payload = json_to_map(input_value).unwrap();
+        let payload = json_to_map(input_value).unwrap();
         let result = pipeline
-            .exec_mut(&mut payload)
+            .exec_mut(payload)
             .unwrap()
             .into_transformed()
             .unwrap();
@@ -411,10 +413,10 @@ transform:
 
         let pipeline: Pipeline = parse(&Content::Yaml(pipeline_yaml)).unwrap();
         let schema = pipeline.schemas().clone();
-        let mut result = json_to_map(input_value).unwrap();
+        let result = json_to_map(input_value).unwrap();
 
         let row = pipeline
-            .exec_mut(&mut result)
+            .exec_mut(result)
             .unwrap()
             .into_transformed()
             .unwrap();

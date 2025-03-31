@@ -91,31 +91,14 @@ impl TryFrom<&Vec<yaml_rust::Yaml>> for Transforms {
 
     fn try_from(docs: &Vec<yaml_rust::Yaml>) -> Result<Self> {
         let mut transforms = Vec::with_capacity(100);
-        let mut all_output_keys: Vec<String> = Vec::with_capacity(100);
-        let mut all_required_keys = Vec::with_capacity(100);
         for doc in docs {
             let transform_builder: Transform = doc
                 .as_hash()
                 .context(TransformElementMustBeMapSnafu)?
                 .try_into()?;
-            let mut transform_output_keys = transform_builder
-                .fields
-                .iter()
-                .map(|f| f.target_or_input_field().to_string())
-                .collect();
-            all_output_keys.append(&mut transform_output_keys);
-
-            let mut transform_required_keys = transform_builder
-                .fields
-                .iter()
-                .map(|f| f.input_field().to_string())
-                .collect();
-            all_required_keys.append(&mut transform_required_keys);
 
             transforms.push(transform_builder);
         }
-
-        all_required_keys.sort();
 
         Ok(Transforms { transforms })
     }
@@ -151,12 +134,12 @@ impl Default for Transform {
 }
 
 impl Transform {
-    pub(crate) fn get_default(&self) -> Option<&Value> {
-        self.default.as_ref()
+    pub(crate) fn get_default(&self) -> Option<Value> {
+        self.default.clone()
     }
 
-    pub(crate) fn get_type_matched_default_val(&self) -> &Value {
-        &self.type_
+    pub(crate) fn get_type_matched_default_val(&self) -> Value {
+        self.type_.clone()
     }
 
     pub(crate) fn get_default_value_when_data_is_none(&self) -> Option<Value> {

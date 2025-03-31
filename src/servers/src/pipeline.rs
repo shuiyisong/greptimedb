@@ -125,9 +125,9 @@ async fn run_custom_pipeline(
     let mut req_map = HashMap::new();
     let mut dispatched: BTreeMap<DispatchedTo, Vec<PipelineMap>> = BTreeMap::new();
 
-    for mut values in data_array {
+    for values in data_array {
         let r = pipeline
-            .exec_mut(&mut values)
+            .exec_mut(values)
             .inspect_err(|_| {
                 METRIC_HTTP_LOGS_TRANSFORM_ELAPSED
                     .with_label_values(&[db.as_str(), METRIC_FAILURE_VALUE])
@@ -147,11 +147,11 @@ async fn run_custom_pipeline(
                     .or_insert_with(|| Vec::with_capacity(arr_len))
                     .push(row);
             }
-            PipelineExecOutput::DispatchedTo(dispatched_to) => {
+            PipelineExecOutput::DispatchedTo(dispatched_to, vs) => {
                 if let Some(coll) = dispatched.get_mut(&dispatched_to) {
-                    coll.push(values);
+                    coll.push(vs);
                 } else {
-                    dispatched.insert(dispatched_to, vec![values]);
+                    dispatched.insert(dispatched_to, vec![vs]);
                 }
             }
         }

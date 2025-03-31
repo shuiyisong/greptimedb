@@ -35,7 +35,7 @@ use crate::error::{
 };
 use crate::etl::field::{Field, Fields};
 use crate::etl::transform::index::Index;
-use crate::etl::transform::{Transform, Transforms};
+use crate::etl::transform::{OnFailure, Transform, Transforms};
 use crate::etl::value::{Timestamp, Value};
 use crate::etl::PipelineMap;
 use crate::IdentityTimeIndex;
@@ -96,7 +96,7 @@ impl GreptimeTransformer {
             type_,
             default,
             index: Some(Index::Time),
-            on_failure: Some(crate::etl::transform::OnFailure::Default),
+            on_failure: Some(OnFailure::Default),
             tag: false,
         };
         transforms.push(transform);
@@ -177,13 +177,34 @@ impl GreptimeTransformer {
         }
     }
 
-    pub fn transform_mut(&self, val: &mut PipelineMap) -> Result<Row> {
+    pub fn transform_mut(&self, mut val: PipelineMap) -> Result<Row> {
         let mut values = vec![GreptimeValue { value_data: None }; self.schema.len()];
         let mut output_index = 0;
+
+        // Create a map of fields that are used multiple times
+        let dup_map: HashMap<&str, usize> = self
+            .transforms
+            .iter()
+            .flat_map(|t| t.fields.iter())
+            .map(|t| t.input_field())
+            .fold(HashMap::new(), |mut map, field| {
+                *map.entry(field).or_insert(0) += 1;
+                map
+            })
+            .into_iter()
+            .filter(|(_, count)| *count > 1)
+            .collect();
+
         for transform in self.transforms.iter() {
             for field in transform.fields.iter() {
-                let index = field.input_field();
-                match val.get(index) {
+                let f_name = field.input_field();
+                let v = if dup_map.contains_key(f_name) {
+                    val.get(f_name).cloned()
+                } else {
+                    val.remove(f_name)
+                };
+
+                match v {
                     Some(v) => {
                         let value_data = coerce_value(v, transform)?;
                         // every transform fields has only one output field
@@ -191,21 +212,20 @@ impl GreptimeTransformer {
                     }
                     None => {
                         let value_data = match transform.on_failure {
-                            Some(crate::etl::transform::OnFailure::Default) => {
-                                match transform.get_default() {
+                            Some(OnFailure::Default) => match transform.get_default() {
+                                Some(default) => coerce_value(default, transform)?,
+                                None => match transform.get_default_value_when_data_is_none() {
                                     Some(default) => coerce_value(default, transform)?,
-                                    None => match transform.get_default_value_when_data_is_none() {
-                                        Some(default) => coerce_value(&default, transform)?,
-                                        None => None,
-                                    },
-                                }
-                            }
-                            Some(crate::etl::transform::OnFailure::Ignore) => None,
+                                    None => None,
+                                },
+                            },
+                            Some(OnFailure::Ignore) => None,
                             None => None,
                         };
                         values[output_index] = GreptimeValue { value_data };
                     }
-                }
+                };
+
                 output_index += 1;
             }
         }
