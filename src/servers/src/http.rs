@@ -57,6 +57,7 @@ use crate::error::{
     ToJsonSnafu,
 };
 use crate::http::influxdb::{influxdb_health, influxdb_ping, influxdb_write_v1, influxdb_write_v2};
+use crate::http::prom_store::PromStoreState;
 use crate::http::prometheus::{
     build_info_query, format_query, instant_query, label_values_query, labels_query, parse_query,
     range_query, series_query,
@@ -103,6 +104,7 @@ mod timeout;
 pub(crate) use timeout::DynamicTimeoutLayer;
 
 mod hints;
+mod read_preference;
 #[cfg(any(test, feature = "testing"))]
 pub mod test_helpers;
 
@@ -554,10 +556,16 @@ impl HttpServerBuilder {
         prom_store_with_metric_engine: bool,
         is_strict_mode: bool,
     ) -> Self {
+        let state = PromStoreState {
+            prom_store_handler: handler,
+            prom_store_with_metric_engine,
+            is_strict_mode,
+        };
+
         Self {
             router: self.router.nest(
                 &format!("/{HTTP_API_VERSION}/prometheus"),
-                HttpServer::route_prom(handler, prom_store_with_metric_engine, is_strict_mode),
+                HttpServer::route_prom(state),
             ),
             ..self
         }
@@ -804,7 +812,10 @@ impl HttpServer {
                         AuthState::new(self.user_provider.clone()),
                         authorize::check_http_auth,
                     ))
-                    .layer(middleware::from_fn(hints::extract_hints)),
+                    .layer(middleware::from_fn(hints::extract_hints))
+                    .layer(middleware::from_fn(
+                        read_preference::extract_read_preference,
+                    )),
             )
             // Handlers for debug, we don't expect a timeout.
             .nest(
@@ -919,6 +930,10 @@ impl HttpServer {
             .route("/logs", routing::post(event::log_ingester))
             .route(
                 "/pipelines/{pipeline_name}",
+                routing::get(event::query_pipeline),
+            )
+            .route(
+                "/pipelines/{pipeline_name}",
                 routing::post(event::add_pipeline),
             )
             .route(
@@ -936,6 +951,10 @@ impl HttpServer {
     fn route_pipelines<S>(log_state: LogState) -> Router<S> {
         Router::new()
             .route("/ingest", routing::post(event::log_ingester))
+            .route(
+                "/pipelines/{pipeline_name}",
+                routing::get(event::query_pipeline),
+            )
             .route(
                 "/pipelines/{pipeline_name}",
                 routing::post(event::add_pipeline),
@@ -1000,36 +1019,11 @@ impl HttpServer {
     ///
     /// [read]: https://prometheus.io/docs/prometheus/latest/querying/remote_read_api/
     /// [write]: https://prometheus.io/docs/concepts/remote_write_spec/
-    fn route_prom<S>(
-        prom_handler: PromStoreProtocolHandlerRef,
-        prom_store_with_metric_engine: bool,
-        is_strict_mode: bool,
-    ) -> Router<S> {
-        let mut router = Router::new().route("/read", routing::post(prom_store::remote_read));
-        match (prom_store_with_metric_engine, is_strict_mode) {
-            (true, true) => {
-                router = router.route("/write", routing::post(prom_store::remote_write))
-            }
-            (true, false) => {
-                router = router.route(
-                    "/write",
-                    routing::post(prom_store::remote_write_without_strict_mode),
-                )
-            }
-            (false, true) => {
-                router = router.route(
-                    "/write",
-                    routing::post(prom_store::route_write_without_metric_engine),
-                )
-            }
-            (false, false) => {
-                router = router.route(
-                    "/write",
-                    routing::post(prom_store::route_write_without_metric_engine_and_strict_mode),
-                )
-            }
-        }
-        router.with_state(prom_handler)
+    fn route_prom<S>(state: PromStoreState) -> Router<S> {
+        Router::new()
+            .route("/read", routing::post(prom_store::remote_read))
+            .route("/write", routing::post(prom_store::remote_write))
+            .with_state(state)
     }
 
     fn route_influxdb<S>(influxdb_handler: InfluxdbLineProtocolHandlerRef) -> Router<S> {
@@ -1175,7 +1169,6 @@ mod test {
     use std::io::Cursor;
     use std::sync::Arc;
 
-    use api::v1::greptime_request::Request;
     use arrow_ipc::reader::FileReader;
     use arrow_schema::DataType;
     use axum::handler::Handler;
@@ -1197,24 +1190,10 @@ mod test {
     use super::*;
     use crate::error::Error;
     use crate::http::test_helpers::TestClient;
-    use crate::query_handler::grpc::GrpcQueryHandler;
     use crate::query_handler::sql::{ServerSqlQueryHandlerAdapter, SqlQueryHandler};
 
     struct DummyInstance {
         _tx: mpsc::Sender<(String, Vec<u8>)>,
-    }
-
-    #[async_trait]
-    impl GrpcQueryHandler for DummyInstance {
-        type Error = Error;
-
-        async fn do_query(
-            &self,
-            _query: Request,
-            _ctx: QueryContextRef,
-        ) -> std::result::Result<Output, Self::Error> {
-            unimplemented!()
-        }
     }
 
     #[async_trait]

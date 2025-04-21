@@ -67,6 +67,14 @@ pub enum Error {
         location: Location,
     },
 
+    #[snafu(display("Failed to serialize region manifest info"))]
+    SerializeRegionManifestInfo {
+        #[snafu(source)]
+        error: serde_json::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+
     #[snafu(display("Failed to decode base64 column value"))]
     DecodeColumnValue {
         #[snafu(source)]
@@ -118,6 +126,7 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+
     #[snafu(display("Mito delete operation fails"))]
     MitoDeleteOperation {
         source: BoxedError,
@@ -127,6 +136,13 @@ pub enum Error {
 
     #[snafu(display("Mito catchup operation fails"))]
     MitoCatchupOperation {
+        source: BoxedError,
+        #[snafu(implicit)]
+        location: Location,
+    },
+
+    #[snafu(display("Mito sync operation fails"))]
+    MitoSyncOperation {
         source: BoxedError,
         #[snafu(implicit)]
         location: Location,
@@ -260,8 +276,9 @@ pub enum Error {
         location: Location,
     },
 
-    #[snafu(display("Unsupported sync region request"))]
-    UnsupportedSyncRegion {
+    #[snafu(display("Expected metric manifest info, region: {}", region_id))]
+    MetricManifestInfo {
+        region_id: RegionId,
         #[snafu(implicit)]
         location: Location,
     },
@@ -286,16 +303,17 @@ impl ErrorExt for Error {
             | UnexpectedRequest { .. }
             | UnsupportedAlterKind { .. } => StatusCode::InvalidArguments,
 
-            ForbiddenPhysicalAlter { .. }
-            | UnsupportedRegionRequest { .. }
-            | UnsupportedSyncRegion { .. } => StatusCode::Unsupported,
+            ForbiddenPhysicalAlter { .. } | UnsupportedRegionRequest { .. } => {
+                StatusCode::Unsupported
+            }
 
             DeserializeColumnMetadata { .. }
             | SerializeColumnMetadata { .. }
             | DecodeColumnValue { .. }
             | ParseRegionId { .. }
             | InvalidMetadata { .. }
-            | SetSkippingIndexOption { .. } => StatusCode::Unexpected,
+            | SetSkippingIndexOption { .. }
+            | SerializeRegionManifestInfo { .. } => StatusCode::Unexpected,
 
             PhysicalRegionNotFound { .. } | LogicalRegionNotFound { .. } => {
                 StatusCode::RegionNotFound
@@ -310,11 +328,14 @@ impl ErrorExt for Error {
             | MitoWriteOperation { source, .. }
             | MitoCatchupOperation { source, .. }
             | MitoFlushOperation { source, .. }
-            | MitoDeleteOperation { source, .. } => source.status_code(),
+            | MitoDeleteOperation { source, .. }
+            | MitoSyncOperation { source, .. } => source.status_code(),
 
             EncodePrimaryKey { source, .. } => source.status_code(),
 
             CollectRecordBatchStream { source, .. } => source.status_code(),
+
+            MetricManifestInfo { .. } => StatusCode::Internal,
         }
     }
 

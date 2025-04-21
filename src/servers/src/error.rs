@@ -25,6 +25,7 @@ use common_error::ext::{BoxedError, ErrorExt};
 use common_error::status_code::StatusCode;
 use common_macro::stack_trace_debug;
 use common_telemetry::{error, warn};
+use common_time::Duration;
 use datafusion::error::DataFusionError;
 use datatypes::prelude::ConcreteDataType;
 use headers::ContentType;
@@ -539,12 +540,6 @@ pub enum Error {
         location: Location,
     },
 
-    #[snafu(display("Missing query context"))]
-    MissingQueryContext {
-        #[snafu(implicit)]
-        location: Location,
-    },
-
     #[snafu(display("Invalid table name"))]
     InvalidTableName {
         #[snafu(source)]
@@ -615,6 +610,16 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+
+    #[snafu(display("Overflow while casting `{:?}` to Interval", val))]
+    DurationOverflow { val: Duration },
+
+    #[snafu(display("Failed to handle otel-arrow request, error message: {}", err_msg))]
+    HandleOtelArrowRequest {
+        err_msg: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -673,7 +678,6 @@ impl ErrorExt for Error {
             | TimePrecision { .. }
             | UrlDecode { .. }
             | IncompatibleSchema { .. }
-            | MissingQueryContext { .. }
             | MysqlValueConversion { .. }
             | ParseJson { .. }
             | InvalidLokiLabels { .. }
@@ -734,6 +738,10 @@ impl ErrorExt for Error {
             ConvertSqlValue { source, .. } => source.status_code(),
 
             InFlightWriteBytesExceeded { .. } => StatusCode::RateLimited,
+
+            DurationOverflow { .. } => StatusCode::InvalidArguments,
+
+            HandleOtelArrowRequest { .. } => StatusCode::Internal,
         }
     }
 
@@ -772,9 +780,14 @@ impl IntoResponse for Error {
     }
 }
 
+/// Converts [StatusCode] to [HttpStatusCode].
 pub fn status_code_to_http_status(status_code: &StatusCode) -> HttpStatusCode {
     match status_code {
-        StatusCode::Success | StatusCode::Cancelled => HttpStatusCode::OK,
+        StatusCode::Success => HttpStatusCode::OK,
+
+        // When a request is cancelled by the client (e.g., by a client side timeout),
+        // we should return a gateway timeout status code to the external client.
+        StatusCode::Cancelled | StatusCode::DeadlineExceeded => HttpStatusCode::GATEWAY_TIMEOUT,
 
         StatusCode::Unsupported
         | StatusCode::InvalidArguments

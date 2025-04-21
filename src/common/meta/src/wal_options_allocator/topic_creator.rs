@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use common_telemetry::{error, info};
+use common_wal::config::kafka::common::DEFAULT_BACKOFF_CONFIG;
 use common_wal::config::kafka::MetasrvKafkaConfig;
 use rskafka::client::error::Error as RsKafkaError;
 use rskafka::client::error::ProtocolError::TopicAlreadyExists;
 use rskafka::client::partition::{Compression, UnknownTopicHandling};
 use rskafka::client::{Client, ClientBuilder};
 use rskafka::record::Record;
-use rskafka::BackoffConfig;
 use snafu::ResultExt;
 
 use crate::error::{
@@ -44,6 +44,10 @@ pub struct KafkaTopicCreator {
 }
 
 impl KafkaTopicCreator {
+    pub fn client(&self) -> &Client {
+        &self.client
+    }
+
     async fn create_topic(&self, topic: &String, client: &Client) -> Result<()> {
         let controller = client
             .controller_client()
@@ -125,31 +129,30 @@ impl KafkaTopicCreator {
     }
 }
 
-pub async fn build_kafka_topic_creator(config: &MetasrvKafkaConfig) -> Result<KafkaTopicCreator> {
+/// Builds a kafka [Client](rskafka::client::Client).
+pub async fn build_kafka_client(config: &MetasrvKafkaConfig) -> Result<Client> {
     // Builds an kafka controller client for creating topics.
-    let backoff_config = BackoffConfig {
-        init_backoff: config.backoff.init,
-        max_backoff: config.backoff.max,
-        base: config.backoff.base as f64,
-        deadline: config.backoff.deadline,
-    };
     let broker_endpoints = common_wal::resolve_to_ipv4(&config.connection.broker_endpoints)
         .await
         .context(ResolveKafkaEndpointSnafu)?;
-    let mut builder = ClientBuilder::new(broker_endpoints).backoff_config(backoff_config);
+    let mut builder = ClientBuilder::new(broker_endpoints).backoff_config(DEFAULT_BACKOFF_CONFIG);
     if let Some(sasl) = &config.connection.sasl {
         builder = builder.sasl_config(sasl.config.clone().into_sasl_config());
     };
     if let Some(tls) = &config.connection.tls {
         builder = builder.tls_config(tls.to_tls_config().await.context(TlsConfigSnafu)?)
     };
-    let client = builder
+    builder
         .build()
         .await
         .with_context(|_| BuildKafkaClientSnafu {
             broker_endpoints: config.connection.broker_endpoints.clone(),
-        })?;
+        })
+}
 
+/// Builds a [KafkaTopicCreator].
+pub async fn build_kafka_topic_creator(config: &MetasrvKafkaConfig) -> Result<KafkaTopicCreator> {
+    let client = build_kafka_client(config).await?;
     Ok(KafkaTopicCreator {
         client,
         num_partitions: config.kafka_topic.num_partitions,

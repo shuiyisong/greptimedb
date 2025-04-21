@@ -36,6 +36,7 @@ use common_meta::leadership_notifier::{
 use common_meta::node_expiry_listener::NodeExpiryListener;
 use common_meta::peer::Peer;
 use common_meta::region_keeper::MemoryRegionKeeperRef;
+use common_meta::region_registry::LeaderRegionRegistryRef;
 use common_meta::wal_options_allocator::WalOptionsAllocatorRef;
 use common_options::datanode::DatanodeClientOptions;
 use common_procedure::options::ProcedureConfig;
@@ -60,6 +61,7 @@ use crate::failure_detector::PhiAccrualFailureDetectorOptions;
 use crate::handler::{HeartbeatHandlerGroupBuilder, HeartbeatHandlerGroupRef};
 use crate::lease::lookup_datanode_peer;
 use crate::procedure::region_migration::manager::RegionMigrationManagerRef;
+use crate::procedure::wal_prune::manager::WalPruneTickerRef;
 use crate::procedure::ProcedureManagerListenerAdapter;
 use crate::pubsub::{PublisherRef, SubscriptionManagerRef};
 use crate::region::supervisor::RegionSupervisorTickerRef;
@@ -258,11 +260,13 @@ pub struct Context {
     pub is_infancy: bool,
     pub table_metadata_manager: TableMetadataManagerRef,
     pub cache_invalidator: CacheInvalidatorRef,
+    pub leader_region_registry: LeaderRegionRegistryRef,
 }
 
 impl Context {
     pub fn reset_in_memory(&self) {
         self.in_memory.reset();
+        self.leader_region_registry.reset();
     }
 }
 
@@ -403,6 +407,8 @@ pub struct Metasrv {
     region_migration_manager: RegionMigrationManagerRef,
     region_supervisor_ticker: Option<RegionSupervisorTickerRef>,
     cache_invalidator: CacheInvalidatorRef,
+    leader_region_registry: LeaderRegionRegistryRef,
+    wal_prune_ticker: Option<WalPruneTickerRef>,
 
     plugins: Plugins,
 }
@@ -456,6 +462,9 @@ impl Metasrv {
             )));
             if let Some(region_supervisor_ticker) = &self.region_supervisor_ticker {
                 leadership_change_notifier.add_listener(region_supervisor_ticker.clone() as _);
+            }
+            if let Some(wal_prune_ticker) = &self.wal_prune_ticker {
+                leadership_change_notifier.add_listener(wal_prune_ticker.clone() as _);
             }
             if let Some(customizer) = self.plugins.get::<LeadershipChangeNotifierCustomizerRef>() {
                 customizer.customize(&mut leadership_change_notifier);
@@ -668,6 +677,7 @@ impl Metasrv {
         let election = self.election.clone();
         let table_metadata_manager = self.table_metadata_manager.clone();
         let cache_invalidator = self.cache_invalidator.clone();
+        let leader_region_registry = self.leader_region_registry.clone();
 
         Context {
             server_addr,
@@ -680,6 +690,7 @@ impl Metasrv {
             is_infancy: false,
             table_metadata_manager,
             cache_invalidator,
+            leader_region_registry,
         }
     }
 }

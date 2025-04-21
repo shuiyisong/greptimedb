@@ -34,6 +34,7 @@ use api::v1::RowInsertRequests;
 use async_trait::async_trait;
 use catalog::CatalogManager;
 use common_query::Output;
+use datatypes::timestamp::TimestampNanosecond;
 use headers::HeaderValue;
 use log_query::LogQuery;
 use opentelemetry_proto::tonic::collector::logs::v1::ExportLogsServiceRequest;
@@ -165,6 +166,14 @@ pub trait PipelineHandler {
 
     //// Build a pipeline from a string.
     fn build_pipeline(&self, pipeline: &str) -> Result<Pipeline>;
+
+    /// Get a original pipeline by name.
+    async fn get_pipeline_str(
+        &self,
+        name: &str,
+        version: PipelineVersion,
+        query_ctx: QueryContextRef,
+    ) -> Result<(String, TimestampNanosecond)>;
 }
 
 /// Handle log query requests.
@@ -189,6 +198,8 @@ pub trait JaegerQueryHandler {
         ctx: QueryContextRef,
         service_name: &str,
         span_kind: Option<&str>,
+        start_time: Option<i64>,
+        end_time: Option<i64>,
     ) -> Result<Output>;
 
     /// Get trace by trace id. It's used for `/api/traces/{trace_id}` API.

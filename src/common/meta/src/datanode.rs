@@ -92,6 +92,29 @@ pub struct RegionStat {
     pub sst_size: u64,
     /// The size of the SST index files in bytes.
     pub index_size: u64,
+    /// The manifest infoof the region.
+    pub region_manifest: RegionManifestInfo,
+    /// The latest entry id of topic used by data.
+    /// **Only used by remote WAL prune.**
+    pub data_topic_latest_entry_id: u64,
+    /// The latest entry id of topic used by metadata.
+    /// **Only used by remote WAL prune.**
+    /// In mito engine, this is the same as `data_topic_latest_entry_id`.
+    pub metadata_topic_latest_entry_id: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum RegionManifestInfo {
+    Mito {
+        manifest_version: u64,
+        flushed_entry_id: u64,
+    },
+    Metric {
+        data_manifest_version: u64,
+        data_flushed_entry_id: u64,
+        metadata_manifest_version: u64,
+        metadata_flushed_entry_id: u64,
+    },
 }
 
 impl Stat {
@@ -125,6 +148,43 @@ impl Stat {
         self.rcus = self.region_stats.iter().map(|s| s.rcus).sum();
         self.wcus = self.region_stats.iter().map(|s| s.wcus).sum();
         self.region_num = self.region_stats.len() as u64;
+    }
+
+    pub fn memory_size(&self) -> usize {
+        // timestamp_millis, rcus, wcus
+        std::mem::size_of::<i64>() * 3 +
+        // id, region_num, node_epoch
+        std::mem::size_of::<u64>() * 3 +
+        // addr
+        std::mem::size_of::<String>() + self.addr.capacity() +
+        // region_stats
+        self.region_stats.iter().map(|s| s.memory_size()).sum::<usize>()
+    }
+}
+
+impl RegionStat {
+    pub fn memory_size(&self) -> usize {
+        // role
+        std::mem::size_of::<RegionRole>() +
+        // id
+        std::mem::size_of::<RegionId>() +
+        // rcus, wcus, approximate_bytes, num_rows
+        std::mem::size_of::<i64>() * 4 +
+        // memtable_size, manifest_size, sst_size, index_size
+        std::mem::size_of::<u64>() * 4 +
+        // engine
+        std::mem::size_of::<String>() + self.engine.capacity() +
+        // region_manifest
+        self.region_manifest.memory_size()
+    }
+}
+
+impl RegionManifestInfo {
+    pub fn memory_size(&self) -> usize {
+        match self {
+            RegionManifestInfo::Mito { .. } => std::mem::size_of::<u64>() * 2,
+            RegionManifestInfo::Metric { .. } => std::mem::size_of::<u64>() * 4,
+        }
     }
 }
 
@@ -165,6 +225,31 @@ impl TryFrom<&HeartbeatRequest> for Stat {
     }
 }
 
+impl From<store_api::region_engine::RegionManifestInfo> for RegionManifestInfo {
+    fn from(value: store_api::region_engine::RegionManifestInfo) -> Self {
+        match value {
+            store_api::region_engine::RegionManifestInfo::Mito {
+                manifest_version,
+                flushed_entry_id,
+            } => RegionManifestInfo::Mito {
+                manifest_version,
+                flushed_entry_id,
+            },
+            store_api::region_engine::RegionManifestInfo::Metric {
+                data_manifest_version,
+                data_flushed_entry_id,
+                metadata_manifest_version,
+                metadata_flushed_entry_id,
+            } => RegionManifestInfo::Metric {
+                data_manifest_version,
+                data_flushed_entry_id,
+                metadata_manifest_version,
+                metadata_flushed_entry_id,
+            },
+        }
+    }
+}
+
 impl From<&api::v1::meta::RegionStat> for RegionStat {
     fn from(value: &api::v1::meta::RegionStat) -> Self {
         let region_stat = value
@@ -185,6 +270,9 @@ impl From<&api::v1::meta::RegionStat> for RegionStat {
             manifest_size: region_stat.manifest_size,
             sst_size: region_stat.sst_size,
             index_size: region_stat.index_size,
+            region_manifest: region_stat.manifest.into(),
+            data_topic_latest_entry_id: region_stat.data_topic_latest_entry_id,
+            metadata_topic_latest_entry_id: region_stat.metadata_topic_latest_entry_id,
         }
     }
 }

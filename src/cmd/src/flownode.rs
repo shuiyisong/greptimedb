@@ -32,10 +32,11 @@ use common_meta::key::TableMetadataManager;
 use common_telemetry::info;
 use common_telemetry::logging::TracingOptions;
 use common_version::{short_version, version};
-use flow::{FlownodeBuilder, FlownodeInstance, FrontendInvoker};
+use flow::{
+    FlownodeBuilder, FlownodeInstance, FlownodeServiceBuilder, FrontendClient, FrontendInvoker,
+};
 use meta_client::{MetaClientOptions, MetaClientType};
-use servers::Mode;
-use snafu::{OptionExt, ResultExt};
+use snafu::{ensure, OptionExt, ResultExt};
 use tracing_appender::non_blocking::WorkerGuard;
 
 use crate::error::{
@@ -203,7 +204,6 @@ impl StartCommand {
                 .get_or_insert_with(MetaClientOptions::default)
                 .metasrv_addrs
                 .clone_from(metasrv_addrs);
-            opts.mode = Mode::Distributed;
         }
 
         if let Some(http_addr) = &self.http_addr {
@@ -214,12 +214,12 @@ impl StartCommand {
             opts.http.timeout = Duration::from_secs(http_timeout);
         }
 
-        if let (Mode::Distributed, None) = (&opts.mode, &opts.node_id) {
-            return MissingConfigSnafu {
-                msg: "Missing node id option",
+        ensure!(
+            opts.node_id.is_some(),
+            MissingConfigSnafu {
+                msg: "Missing node id option"
             }
-            .fail();
-        }
+        );
 
         Ok(())
     }
@@ -315,16 +315,26 @@ impl StartCommand {
         );
 
         let flow_metadata_manager = Arc::new(FlowMetadataManager::new(cached_meta_backend.clone()));
+        let frontend_client = FrontendClient::from_meta_client(meta_client.clone());
         let flownode_builder = FlownodeBuilder::new(
-            opts,
+            opts.clone(),
             Plugins::new(),
             table_metadata_manager,
             catalog_manager.clone(),
             flow_metadata_manager,
+            Arc::new(frontend_client),
         )
         .with_heartbeat_task(heartbeat_task);
 
-        let flownode = flownode_builder.build().await.context(StartFlownodeSnafu)?;
+        let mut flownode = flownode_builder.build().await.context(StartFlownodeSnafu)?;
+        let services = FlownodeServiceBuilder::new(&opts)
+            .with_grpc_server(flownode.flownode_server().clone())
+            .enable_http_service()
+            .build()
+            .await
+            .context(StartFlownodeSnafu)?;
+        flownode.setup_services(services);
+        let flownode = flownode;
 
         // flownode's frontend to datanode need not timeout.
         // Some queries are expected to take long time.

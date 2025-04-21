@@ -51,8 +51,9 @@ loki-proto.workspace = true
 meta-client.workspace = true
 meta-srv = { workspace = true, features = ["mock"] }
 moka.workspace = true
-mysql_async = { version = "0.33", default-features = false, features = [
-    "default-rustls",
+mysql_async = { version = "0.35", default-features = false, features = [
+    "time",
+    "default-rustls-ring",
 ] }
 object-store.workspace = true
 operator = { workspace = true, features = ["testing"] }
@@ -99,3 +100,4 @@ session = { workspace = true, features = ["testing"] }
 store-api.workspace = true
 tokio-postgres = { workspace = true }
 url = "2.3"
+yaml-rust = "0.4"

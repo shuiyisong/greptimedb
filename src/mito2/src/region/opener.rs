@@ -224,6 +224,7 @@ impl RegionOpener {
             metadata.clone(),
             region_manifest_options,
             self.stats.total_manifest_size.clone(),
+            self.stats.manifest_version.clone(),
         )
         .await?;
 
@@ -273,6 +274,7 @@ impl RegionOpener {
             last_flush_millis: AtomicI64::new(now),
             last_compaction_millis: AtomicI64::new(now),
             time_provider: self.time_provider.clone(),
+            topic_latest_entry_id: AtomicU64::new(0),
             memtable_builder,
             stats: self.stats,
         })
@@ -352,6 +354,7 @@ impl RegionOpener {
         let Some(manifest_manager) = RegionManifestManager::open(
             region_manifest_options,
             self.stats.total_manifest_size.clone(),
+            self.stats.manifest_version.clone(),
         )
         .await?
         else {
@@ -450,6 +453,7 @@ impl RegionOpener {
             last_flush_millis: AtomicI64::new(now),
             last_compaction_millis: AtomicI64::new(now),
             time_provider: self.time_provider.clone(),
+            topic_latest_entry_id: AtomicU64::new(0),
             memtable_builder,
             stats: self.stats.clone(),
         };
@@ -529,9 +533,12 @@ impl RegionMetadataLoader {
             region_dir,
             &self.object_store_manager,
         )?;
-        let Some(manifest_manager) =
-            RegionManifestManager::open(region_manifest_options, Arc::new(AtomicU64::new(0)))
-                .await?
+        let Some(manifest_manager) = RegionManifestManager::open(
+            region_manifest_options,
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU64::new(0)),
+        )
+        .await?
         else {
             return Ok(None);
         };

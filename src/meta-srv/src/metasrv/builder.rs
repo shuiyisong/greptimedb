@@ -34,14 +34,14 @@ use common_meta::kv_backend::memory::MemoryKvBackend;
 use common_meta::kv_backend::{KvBackendRef, ResettableKvBackendRef};
 use common_meta::node_manager::NodeManagerRef;
 use common_meta::region_keeper::MemoryRegionKeeper;
+use common_meta::region_registry::LeaderRegionRegistry;
 use common_meta::sequence::SequenceBuilder;
 use common_meta::state_store::KvStateStore;
-use common_meta::wal_options_allocator::build_wal_options_allocator;
+use common_meta::wal_options_allocator::{build_kafka_client, build_wal_options_allocator};
 use common_procedure::local::{LocalManager, ManagerConfig};
 use common_procedure::ProcedureManagerRef;
 use snafu::ResultExt;
 
-use super::{SelectTarget, FLOW_ID_SEQ};
 use crate::cache_invalidator::MetasrvCacheInvalidator;
 use crate::cluster::{MetaPeerClientBuilder, MetaPeerClientRef};
 use crate::error::{self, BuildWalOptionsAllocatorSnafu, Result};
@@ -49,14 +49,17 @@ use crate::flow_meta_alloc::FlowPeerAllocator;
 use crate::greptimedb_telemetry::get_greptimedb_telemetry_task;
 use crate::handler::failure_handler::RegionFailureHandler;
 use crate::handler::flow_state_handler::FlowStateHandler;
-use crate::handler::region_lease_handler::RegionLeaseHandler;
+use crate::handler::region_lease_handler::{CustomizedRegionLeaseRenewerRef, RegionLeaseHandler};
 use crate::handler::{HeartbeatHandlerGroupBuilder, HeartbeatMailbox, Pushers};
 use crate::lease::MetaPeerLookupService;
 use crate::metasrv::{
-    ElectionRef, Metasrv, MetasrvInfo, MetasrvOptions, SelectorContext, SelectorRef, TABLE_ID_SEQ,
+    ElectionRef, Metasrv, MetasrvInfo, MetasrvOptions, SelectTarget, SelectorContext, SelectorRef,
+    FLOW_ID_SEQ, TABLE_ID_SEQ,
 };
 use crate::procedure::region_migration::manager::RegionMigrationManager;
 use crate::procedure::region_migration::DefaultContextFactory;
+use crate::procedure::wal_prune::manager::{WalPruneManager, WalPruneTicker};
+use crate::procedure::wal_prune::Context as WalPruneContext;
 use crate::region::supervisor::{
     HeartbeatAcceptor, RegionFailureDetectorControl, RegionSupervisor, RegionSupervisorTicker,
     DEFAULT_TICK_INTERVAL,
@@ -325,12 +328,14 @@ impl MetasrvBuilder {
             None
         };
 
+        let leader_region_registry = Arc::new(LeaderRegionRegistry::default());
         let ddl_manager = Arc::new(
             DdlManager::try_new(
                 DdlContext {
                     node_manager,
                     cache_invalidator: cache_invalidator.clone(),
                     memory_region_keeper: memory_region_keeper.clone(),
+                    leader_region_registry: leader_region_registry.clone(),
                     table_metadata_manager: table_metadata_manager.clone(),
                     table_metadata_allocator: table_metadata_allocator.clone(),
                     flow_metadata_manager: flow_metadata_manager.clone(),
@@ -343,6 +348,44 @@ impl MetasrvBuilder {
             .context(error::InitDdlManagerSnafu)?,
         );
 
+        // remote WAL prune ticker and manager
+        let wal_prune_ticker = if is_remote_wal && options.wal.enable_active_wal_pruning() {
+            let (tx, rx) = WalPruneManager::channel();
+            // Safety: Must be remote WAL.
+            let remote_wal_options = options.wal.remote_wal_options().unwrap();
+            let kafka_client = build_kafka_client(remote_wal_options)
+                .await
+                .context(error::BuildKafkaClientSnafu)?;
+            let wal_prune_context = WalPruneContext {
+                client: Arc::new(kafka_client),
+                table_metadata_manager: table_metadata_manager.clone(),
+                leader_region_registry: leader_region_registry.clone(),
+                server_addr: options.server_addr.clone(),
+                mailbox: mailbox.clone(),
+            };
+            let wal_prune_manager = WalPruneManager::new(
+                table_metadata_manager.clone(),
+                remote_wal_options.auto_prune_parallelism,
+                rx,
+                procedure_manager.clone(),
+                wal_prune_context,
+                remote_wal_options.trigger_flush_threshold,
+            );
+            // Start manager in background. Ticker will be started in the main thread to send ticks.
+            wal_prune_manager.try_start().await?;
+            let wal_prune_ticker = Arc::new(WalPruneTicker::new(
+                remote_wal_options.auto_prune_interval,
+                tx.clone(),
+            ));
+            Some(wal_prune_ticker)
+        } else {
+            None
+        };
+
+        let customized_region_lease_renewer = plugins
+            .as_ref()
+            .and_then(|plugins| plugins.get::<CustomizedRegionLeaseRenewerRef>());
+
         let handler_group_builder = match handler_group_builder {
             Some(handler_group_builder) => handler_group_builder,
             None => {
@@ -350,6 +393,7 @@ impl MetasrvBuilder {
                     distributed_time_constants::REGION_LEASE_SECS,
                     table_metadata_manager.clone(),
                     memory_region_keeper.clone(),
+                    customized_region_lease_renewer,
                 );
 
                 HeartbeatHandlerGroupBuilder::new(pushers)
@@ -397,6 +441,8 @@ impl MetasrvBuilder {
             region_migration_manager,
             region_supervisor_ticker,
             cache_invalidator,
+            leader_region_registry,
+            wal_prune_ticker,
         })
     }
 }
@@ -433,13 +479,20 @@ fn build_procedure_manager(
         max_running_procedures: options.procedure.max_running_procedures,
         ..Default::default()
     };
-    let state_store = KvStateStore::new(kv_backend.clone()).with_max_value_size(
-        options
-            .procedure
-            .max_metadata_value_size
-            .map(|v| v.as_bytes() as usize),
+    let kv_state_store = Arc::new(
+        KvStateStore::new(kv_backend.clone()).with_max_value_size(
+            options
+                .procedure
+                .max_metadata_value_size
+                .map(|v| v.as_bytes() as usize),
+        ),
     );
-    Arc::new(LocalManager::new(manager_config, Arc::new(state_store)))
+
+    Arc::new(LocalManager::new(
+        manager_config,
+        kv_state_store.clone(),
+        kv_state_store,
+    ))
 }
 
 impl Default for MetasrvBuilder {

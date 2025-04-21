@@ -517,12 +517,7 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Unsupported number type: {value}"))]
-    ValueUnsupportedNumberType {
-        value: serde_json::Number,
-        #[snafu(implicit)]
-        location: Location,
-    },
+
     #[snafu(display("Unsupported yaml type: {value:?}"))]
     ValueUnsupportedYamlType {
         value: yaml_rust::Yaml,
@@ -571,6 +566,13 @@ pub enum Error {
     #[snafu(display("Unsupported number type: {value:?}"))]
     UnsupportedNumberType {
         value: serde_json::Number,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Failed to parse json"))]
+    JsonParse {
+        #[snafu(source)]
+        error: serde_json::Error,
         #[snafu(implicit)]
         location: Location,
     },
@@ -710,6 +712,12 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+
+    #[snafu(display("Pipeline is required for this API."))]
+    PipelineMissing {
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -802,7 +810,6 @@ impl ErrorExt for Error {
             | ValueParseFloat { .. }
             | ValueParseBoolean { .. }
             | ValueDefaultValueUnsupported { .. }
-            | ValueUnsupportedNumberType { .. }
             | ValueUnsupportedYamlType { .. }
             | ValueYamlKeyMustBeString { .. }
             | YamlLoad { .. }
@@ -812,6 +819,7 @@ impl ErrorExt for Error {
             | UnsupportedIndexType { .. }
             | UnsupportedNumberType { .. }
             | IdentifyPipelineColumnTypeMismatch { .. }
+            | JsonParse { .. }
             | JsonPathParse { .. }
             | JsonPathParseResultIndex { .. }
             | FieldRequiredForDispatcher
@@ -819,7 +827,8 @@ impl ErrorExt for Error {
             | ValueRequiredForDispatcherRule
             | ReachedMaxNestedLevels { .. }
             | RequiredTableSuffixTemplate
-            | InvalidTableSuffixTemplate { .. } => StatusCode::InvalidArguments,
+            | InvalidTableSuffixTemplate { .. }
+            | PipelineMissing { .. } => StatusCode::InvalidArguments,
         }
     }
 
