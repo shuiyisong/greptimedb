@@ -132,19 +132,19 @@ impl FileWatcherBuilder {
         // Collect unique parent directories to watch
         let mut watched_dirs: HashSet<PathBuf> = HashSet::new();
         for file_path in &self.file_paths {
-            if let Some(grand_parent) = file_path.parent().and_then(|f| f.parent())
-                && watched_dirs.insert(grand_parent.to_path_buf())
+            if let Some(parent) = file_path.parent()
+                && watched_dirs.insert(parent.to_path_buf())
             {
                 watcher
-                    .watch(grand_parent, RecursiveMode::Recursive)
+                    .watch(parent, RecursiveMode::Recursive)
                     .context(FileWatchSnafu {
-                        path: grand_parent.display().to_string(),
+                        path: parent.display().to_string(),
                     })?;
             }
         }
 
         let config = self.config;
-        let watched_files: HashSet<PathBuf> = self.file_paths.iter().cloned().collect();
+        // let watched_files: HashSet<PathBuf> = self.file_paths.iter().cloned().collect();
 
         info!(
             "Spawning file watcher for paths: {:?} (watching parent directories)",
@@ -175,23 +175,23 @@ impl FileWatcherBuilder {
                             continue;
                         }
 
-                        // Check if any of the event paths match our watched files
-                        let is_watched_file = event.paths.iter().any(|event_path| {
-                            // Try to canonicalize the event path for comparison
-                            // If the file was deleted, canonicalize will fail, so we also
-                            // compare the raw path
-                            if let Ok(canonical) = event_path.canonicalize()
-                                && watched_files.contains(&canonical)
-                            {
-                                return true;
-                            }
-                            // For deleted files, compare using the raw path
-                            watched_files.contains(event_path)
-                        });
+                        // // Check if any of the event paths match our watched files
+                        // let is_watched_file = event.paths.iter().any(|event_path| {
+                        //     // Try to canonicalize the event path for comparison
+                        //     // If the file was deleted, canonicalize will fail, so we also
+                        //     // compare the raw path
+                        //     if let Ok(canonical) = event_path.canonicalize()
+                        //         && watched_files.contains(&canonical)
+                        //     {
+                        //         return true;
+                        //     }
+                        //     // For deleted files, compare using the raw path
+                        //     watched_files.contains(event_path)
+                        // });
 
-                        if !is_watched_file {
-                            continue;
-                        }
+                        // if !is_watched_file {
+                        //     continue;
+                        // }
 
                         info!(?event.kind, ?event.paths, "Detected file change");
                         callback();
