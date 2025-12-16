@@ -94,10 +94,10 @@ impl FileWatcherBuilder {
             }
         );
         // Canonicalize the path for reliable comparison with event paths
-        let canonical = path.canonicalize().context(CanonicalizePathSnafu {
-            path: path.display().to_string(),
-        })?;
-        self.file_paths.push(canonical);
+        // let canonical = path.canonicalize().context(CanonicalizePathSnafu {
+        //     path: path.display().to_string(),
+        // })?;
+        self.file_paths.push(path.to_path_buf());
         Ok(self)
     }
 
@@ -167,7 +167,7 @@ impl FileWatcherBuilder {
                             event
                                 .paths
                                 .iter()
-                                .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()).clone())
+                                .map(|p| p.to_path_buf())
                                 .collect::<Vec<_>>()
                         );
 
