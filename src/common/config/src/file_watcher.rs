@@ -207,6 +207,7 @@ impl Default for FileWatcherBuilder {
 
 /// Check if an event kind is relevant based on the configuration.
 fn is_relevant_event(kind: &EventKind, config: &FileWatcherConfig) -> bool {
+    warn!("[DEBUG]watch event: {:?}", kind);
     match kind {
         EventKind::Modify(_) | EventKind::Create(_) => true,
         EventKind::Remove(_) => config.include_remove_events,
