@@ -161,6 +161,16 @@ impl FileWatcherBuilder {
             while let Ok(res) = rx.recv() {
                 match res {
                     Ok(event) => {
+                        warn!(
+                            "[DEBUG]watch event: {:?}, path: {:?}",
+                            event.kind,
+                            event
+                                .paths
+                                .iter()
+                                .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()).clone())
+                                .collect::<Vec<_>>()
+                        );
+
                         if !is_relevant_event(&event.kind, &config) {
                             continue;
                         }
@@ -207,7 +217,6 @@ impl Default for FileWatcherBuilder {
 
 /// Check if an event kind is relevant based on the configuration.
 fn is_relevant_event(kind: &EventKind, config: &FileWatcherConfig) -> bool {
-    warn!("[DEBUG]watch event: {:?}", kind);
     match kind {
         EventKind::Modify(_) | EventKind::Create(_) => true,
         EventKind::Remove(_) => config.include_remove_events,
