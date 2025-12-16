@@ -30,7 +30,7 @@ use common_telemetry::{error, info, warn};
 use notify::{EventKind, RecursiveMode, Watcher};
 use snafu::ResultExt;
 
-use crate::error::{CanonicalizePathSnafu, FileWatchSnafu, InvalidPathSnafu, Result};
+use crate::error::{FileWatchSnafu, InvalidPathSnafu, Result};
 
 /// Configuration for the file watcher behavior.
 #[derive(Debug, Clone, Default)]
@@ -164,11 +164,7 @@ impl FileWatcherBuilder {
                         warn!(
                             "[DEBUG]watch event: {:?}, path: {:?}",
                             event.kind,
-                            event
-                                .paths
-                                .iter()
-                                .map(|p| p.to_path_buf())
-                                .collect::<Vec<_>>()
+                            event.paths.iter().cloned()
                         );
 
                         if !is_relevant_event(&event.kind, &config) {
