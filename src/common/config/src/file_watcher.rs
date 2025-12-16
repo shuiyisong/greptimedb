@@ -132,13 +132,13 @@ impl FileWatcherBuilder {
         // Collect unique parent directories to watch
         let mut watched_dirs: HashSet<PathBuf> = HashSet::new();
         for file_path in &self.file_paths {
-            if let Some(parent) = file_path.parent()
-                && watched_dirs.insert(parent.to_path_buf())
+            if let Some(grand_parent) = file_path.parent().and_then(|f| f.parent())
+                && watched_dirs.insert(grand_parent.to_path_buf())
             {
                 watcher
-                    .watch(parent, RecursiveMode::NonRecursive)
+                    .watch(grand_parent, RecursiveMode::Recursive)
                     .context(FileWatchSnafu {
-                        path: parent.display().to_string(),
+                        path: grand_parent.display().to_string(),
                     })?;
             }
         }
