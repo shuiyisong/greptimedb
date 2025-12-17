@@ -47,7 +47,8 @@ impl FileWatcherConfig {
     pub fn new() -> Self {
         Self {
             include_remove_events: false,
-            match_file_name: true,
+            // TODO: make it false to test
+            match_file_name: false,
         }
     }
 
