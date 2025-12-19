@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use api::v1::ColumnDef;
 use common_catalog::consts::{PARENT_SPAN_ID_COLUMN, SERVICE_NAME_COLUMN, TRACE_ID_COLUMN};
 use sql::partition::partition_rule_for_hexstring;
 use sql::statements::create::Partitions;
@@ -19,26 +20,40 @@ use sql::statements::create::Partitions;
 #[cfg(feature = "enterprise")]
 const ENT_TRACE_PARTITION_COLUMN: &str = "greptime_trace_partition";
 
-pub fn trace_partition_rule() -> Result<Partitions, sql::error::Error> {
+pub fn trace_partition_rule(_col_defs: &[ColumnDef]) -> Result<Partitions, sql::error::Error> {
     #[cfg(not(feature = "enterprise"))]
     let p = partition_rule_for_hexstring(TRACE_ID_COLUMN);
     #[cfg(feature = "enterprise")]
-    let p = partition_rule_for_hexstring(ENT_TRACE_PARTITION_COLUMN);
+    let p = {
+        let col = if _col_defs
+            .iter()
+            .any(|c| c.name == ENT_TRACE_PARTITION_COLUMN)
+        {
+            ENT_TRACE_PARTITION_COLUMN
+        } else {
+            TRACE_ID_COLUMN
+        };
+        partition_rule_for_hexstring(col)
+    };
 
     p
 }
 
-pub fn index_columns<'a>() -> Vec<&'a str> {
+pub fn index_columns<'a>(_col_defs: &[ColumnDef]) -> Vec<&'a str> {
     #[cfg(not(feature = "enterprise"))]
     let columns = vec![TRACE_ID_COLUMN, PARENT_SPAN_ID_COLUMN, SERVICE_NAME_COLUMN];
 
     #[cfg(feature = "enterprise")]
-    let columns = vec![
-        TRACE_ID_COLUMN,
-        ENT_TRACE_PARTITION_COLUMN,
-        PARENT_SPAN_ID_COLUMN,
-        SERVICE_NAME_COLUMN,
-    ];
+    let columns = {
+        let mut c = vec![TRACE_ID_COLUMN, PARENT_SPAN_ID_COLUMN, SERVICE_NAME_COLUMN];
+        if _col_defs
+            .iter()
+            .any(|c| c.name == ENT_TRACE_PARTITION_COLUMN)
+        {
+            c.push(ENT_TRACE_PARTITION_COLUMN);
+        }
+        c
+    };
 
     columns
 }

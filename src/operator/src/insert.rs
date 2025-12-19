@@ -642,13 +642,15 @@ impl Inserter {
                         // prebuilt partition rules for uuid data: see the function
                         // for more information
 
-                        let partitions = trace_partition::trace_partition_rule()
-                            .context(CreatePartitionRulesSnafu)?;
+                        let partitions =
+                            trace_partition::trace_partition_rule(&create_table.column_defs)
+                                .context(CreatePartitionRulesSnafu)?;
                         // add skip index to
                         // - trace_id: when searching by trace id
                         // - parent_span_id: when searching root span
                         // - span_name: when searching certain types of span
-                        let index_columns = trace_partition::index_columns();
+                        let index_columns =
+                            trace_partition::index_columns(&create_table.column_defs);
                         for index_column in index_columns {
                             if let Some(col) = create_table
                                 .column_defs
