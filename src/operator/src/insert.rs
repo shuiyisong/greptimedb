@@ -28,10 +28,10 @@ use api::v1::{
 use catalog::CatalogManagerRef;
 use client::{OutputData, OutputMeta};
 use common_catalog::consts::{
-    PARENT_SPAN_ID_COLUMN, SERVICE_NAME_COLUMN, TRACE_ID_COLUMN, TRACE_TABLE_NAME,
-    TRACE_TABLE_NAME_SESSION_KEY, default_engine, trace_operations_table_name,
+    TRACE_TABLE_NAME, TRACE_TABLE_NAME_SESSION_KEY, default_engine, trace_operations_table_name,
     trace_services_table_name,
 };
+use common_frontend::trace_partition;
 use common_grpc_expr::util::ColumnExpr;
 use common_meta::cache::TableFlownodeSetCacheRef;
 use common_meta::node_manager::{AffectedRows, NodeManagerRef};
@@ -47,7 +47,6 @@ use partition::manager::PartitionRuleManagerRef;
 use session::context::QueryContextRef;
 use snafu::ResultExt;
 use snafu::prelude::*;
-use sql::partition::partition_rule_for_hexstring;
 use sql::statements::create::Partitions;
 use sql::statements::insert::Insert;
 use store_api::metric_engine_consts::{
@@ -642,14 +641,14 @@ impl Inserter {
                     } else {
                         // prebuilt partition rules for uuid data: see the function
                         // for more information
-                        let partitions = partition_rule_for_hexstring(TRACE_ID_COLUMN)
+
+                        let partitions = trace_partition::trace_partition_rule()
                             .context(CreatePartitionRulesSnafu)?;
                         // add skip index to
                         // - trace_id: when searching by trace id
                         // - parent_span_id: when searching root span
                         // - span_name: when searching certain types of span
-                        let index_columns =
-                            [TRACE_ID_COLUMN, PARENT_SPAN_ID_COLUMN, SERVICE_NAME_COLUMN];
+                        let index_columns = trace_partition::index_columns();
                         for index_column in index_columns {
                             if let Some(col) = create_table
                                 .column_defs

@@ -112,7 +112,7 @@ impl Event for SlowQueryEvent {
             values: vec![
                 ValueData::U64Value(self.cost).into(),
                 ValueData::U64Value(self.threshold).into(),
-                ValueData::StringValue(self.query.to_string()).into(),
+                ValueData::StringValue(self.query.clone()).into(),
                 ValueData::BoolValue(self.is_promql).into(),
                 ValueData::U64Value(self.promql_range.unwrap_or(0)).into(),
                 ValueData::U64Value(self.promql_step.unwrap_or(0)).into(),
