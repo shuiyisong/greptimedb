@@ -195,6 +195,8 @@ fn get_cache_generic<T: Clone + Send + Sync + 'static>(
         0 => Ok(None),
         1 => Ok(Some(ks.remove(0).1)),
         _ => MultiPipelineWithDiffSchemaSnafu {
+            name: name.to_string(),
+            current_schema: schema.to_string(),
             schemas: ks
                 .iter()
                 .filter_map(|(k, _)| k.split_once('/').map(|k| k.0))

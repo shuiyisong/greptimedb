@@ -342,6 +342,8 @@ impl PipelineTable {
         // throw an error
         let (pipeline_content, found_schema, version) =
             pipeline.context(MultiPipelineWithDiffSchemaSnafu {
+                name: name.to_string(),
+                current_schema: schema.to_string(),
                 schemas: pipeline_vec.iter().map(|v| v.1.clone()).join(","),
             })?;
 
