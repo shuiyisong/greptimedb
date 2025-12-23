@@ -328,31 +328,9 @@ pub async fn query_trace_table(
         }
     };
 
-    let table = instance
-        .catalog_manager()
-        .table(
-            ctx.current_catalog(),
-            &ctx.current_schema(),
-            table_name,
-            Some(&ctx),
-        )
-        .await
-        .context(CatalogSnafu)?
-        .with_context(|| TableNotFoundSnafu {
-            table: table_name,
-            catalog: ctx.current_catalog(),
-            schema: ctx.current_schema(),
-        })?;
-
-    let is_data_model_v1 = table
-        .clone()
-        .table_info()
-        .meta
-        .options
-        .extra_options
-        .get(TABLE_DATA_MODEL)
-        .map(|s| s.as_str())
-        == Some(TABLE_DATA_MODEL_TRACE_V1);
+    let table = get_table(ctx.clone(), instance.catalog_manager(), table_name).await?;
+    let is_data_model_v1 =
+        check_table_option(table.clone(), TABLE_DATA_MODEL, TABLE_DATA_MODEL_TRACE_V1);
 
     // collect to set
     let col_names = table
@@ -413,7 +391,7 @@ pub async fn query_trace_table(
     Ok(output)
 }
 
-async fn get_table(
+pub async fn get_table(
     ctx: QueryContextRef,
     catalog_manager: &CatalogManagerRef,
     table_name: &str,
@@ -432,6 +410,18 @@ async fn get_table(
             catalog: ctx.current_catalog(),
             schema: ctx.current_schema(),
         })
+}
+
+pub fn check_table_option(table: TableRef, option_key: &str, option_value: &str) -> bool {
+    table
+        .clone()
+        .table_info()
+        .meta
+        .options
+        .extra_options
+        .get(option_key)
+        .map(|s| s.as_str())
+        == Some(option_value)
 }
 
 async fn find_traces_rank_3(

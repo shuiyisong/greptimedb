@@ -673,6 +673,9 @@ impl Inserter {
                             TABLE_DATA_MODEL.to_string(),
                             TABLE_DATA_MODEL_TRACE_V1.to_string(),
                         );
+                        for (key, value) in trace_partition::append_trace_option().into_iter() {
+                            create_table.table_options.insert(key, value);
+                        }
 
                         let table = self
                             .create_physical_table(
