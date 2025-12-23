@@ -46,6 +46,28 @@ macro_rules! between_string {
     };
 }
 
+macro_rules! between_number {
+    ($col: expr, $left_incl: expr, $right_excl: expr) => {
+        Expr::BinaryOp {
+            op: BinaryOperator::And,
+            left: Box::new(Expr::BinaryOp {
+                op: BinaryOperator::GtEq,
+                left: Box::new($col.clone()),
+                right: Box::new(Expr::Value(
+                    Value::Number($left_incl.to_string(), false).into(),
+                )),
+            }),
+            right: Box::new(Expr::BinaryOp {
+                op: BinaryOperator::Lt,
+                left: Box::new($col.clone()),
+                right: Box::new(Expr::Value(
+                    Value::Number($right_excl.to_string(), false).into(),
+                )),
+            }),
+        }
+    };
+}
+
 pub fn partition_rule_for_hexstring(ident: &str) -> Result<Partitions> {
     Ok(Partitions {
         column_list: vec![Ident::new(ident)],
@@ -116,6 +138,67 @@ fn partition_rules_for_uuid(partition_num: u32, ident: &str) -> Result<Vec<Expr>
     }
 
     Ok(rules)
+}
+
+/// Fixed partition boundaries for u64 values, dividing the u128 space into 16 partitions.
+const U64_PARTITION_BOUNDARIES: [u64; 16] = [
+    1152921504606846976,
+    2305843009213693952,
+    3458764513820540928,
+    4611686018427387904,
+    5764607523034234880,
+    6917529027641081856,
+    8070450532247928832,
+    9223372036854775808,
+    10376293541461622784,
+    11529215046068469760,
+    12682136550675316736,
+    13835058055282163712,
+    14987979559889010688,
+    16140901064495857664,
+    17293822569102704640,
+    18446744073709551615,
+];
+
+/// Creates partition rules for u64 values using fixed boundaries.
+/// This divides the space into 16 partitions using predefined boundaries.
+pub fn partition_rules_for_u64(ident: &str) -> Vec<Expr> {
+    let ident_expr = Expr::Identifier(Ident::new(ident).clone());
+    let boundaries = &U64_PARTITION_BOUNDARIES;
+    let partition_num = boundaries.len();
+
+    let mut rules = Vec::with_capacity(partition_num);
+
+    for i in 0..partition_num {
+        if i == 0 {
+            // Create the leftmost rule, for example: col < 2305843009213693952.
+            rules.push(Expr::BinaryOp {
+                left: Box::new(ident_expr.clone()),
+                op: BinaryOperator::Lt,
+                right: Box::new(Expr::Value(
+                    Value::Number(boundaries[i].to_string(), false).into(),
+                )),
+            });
+        } else if i == partition_num - 1 {
+            // Create the rightmost rule, for example: col >= 34587645138205409280.
+            rules.push(Expr::BinaryOp {
+                left: Box::new(ident_expr.clone()),
+                op: BinaryOperator::GtEq,
+                right: Box::new(Expr::Value(
+                    Value::Number(boundaries[i - 1].to_string(), false).into(),
+                )),
+            });
+        } else {
+            // Create the middle rules, for example: col >= 2305843009213693952 AND col < 4611686018427387904.
+            rules.push(between_number!(
+                ident_expr,
+                boundaries[i - 1],
+                boundaries[i]
+            ));
+        }
+    }
+
+    rules
 }
 
 #[cfg(test)]
