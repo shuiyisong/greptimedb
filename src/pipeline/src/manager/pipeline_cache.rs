@@ -15,6 +15,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use common_telemetry::tracing::debug;
 use datatypes::timestamp::TimestampNanosecond;
 use moka::sync::Cache;
 
@@ -174,13 +175,13 @@ fn get_cache_generic<T: Clone + Send + Sync + 'static>(
     version: PipelineVersion,
 ) -> Result<Option<T>> {
     // lets try empty schema first
-    let k = generate_pipeline_cache_key(EMPTY_SCHEMA_NAME, name, version);
-    if let Some(value) = cache.get(&k) {
+    let emp_key = generate_pipeline_cache_key(EMPTY_SCHEMA_NAME, name, version);
+    if let Some(value) = cache.get(&emp_key) {
         return Ok(Some(value));
     }
     // use input schema
-    let k = generate_pipeline_cache_key(schema, name, version);
-    if let Some(value) = cache.get(&k) {
+    let schema_k = generate_pipeline_cache_key(schema, name, version);
+    if let Some(value) = cache.get(&schema_k) {
         return Ok(Some(value));
     }
 
@@ -194,15 +195,24 @@ fn get_cache_generic<T: Clone + Send + Sync + 'static>(
     match ks.len() {
         0 => Ok(None),
         1 => Ok(Some(ks.remove(0).1)),
-        _ => MultiPipelineWithDiffSchemaSnafu {
-            name: name.to_string(),
-            current_schema: schema.to_string(),
-            schemas: ks
-                .iter()
-                .filter_map(|(k, _)| k.split_once('/').map(|k| k.0))
-                .collect::<Vec<_>>()
-                .join(","),
+        _ => {
+            debug!(
+                "caches keys: {:?}, emp key: {:?}, schema key: {:?}, suffix key: {:?}",
+                cache.iter().map(|e| e.0).collect::<Vec<_>>(),
+                emp_key,
+                schema_k,
+                suffix_key
+            );
+            MultiPipelineWithDiffSchemaSnafu {
+                name: name.to_string(),
+                current_schema: schema.to_string(),
+                schemas: ks
+                    .iter()
+                    .filter_map(|(k, _)| k.split_once('/').map(|k| k.0))
+                    .collect::<Vec<_>>()
+                    .join(","),
+            }
+            .fail()?
         }
-        .fail()?,
     }
 }
