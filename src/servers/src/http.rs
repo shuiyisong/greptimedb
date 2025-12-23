@@ -1153,7 +1153,7 @@ impl HttpServer {
             .with_state(opentsdb_handler)
     }
 
-    fn route_otlp<S>(
+    pub fn route_otlp<S>(
         otlp_handler: OpenTelemetryProtocolHandlerRef,
         with_metric_engine: bool,
     ) -> Router<S> {
@@ -1177,7 +1177,7 @@ impl HttpServer {
             .with_state(state)
     }
 
-    fn route_jaeger<S>(handler: JaegerQueryHandlerRef) -> Router<S> {
+    pub fn route_jaeger<S>(handler: JaegerQueryHandlerRef) -> Router<S> {
         Router::new()
             .route("/api/services", routing::get(jaeger::handle_get_services))
             .route(
