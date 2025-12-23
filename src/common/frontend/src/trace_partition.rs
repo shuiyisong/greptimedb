@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
+
 use api::v1::ColumnDef;
 use common_catalog::consts::{PARENT_SPAN_ID_COLUMN, SERVICE_NAME_COLUMN, TRACE_ID_COLUMN};
 use sql::statements::create::Partitions;
@@ -37,6 +39,17 @@ pub fn trace_partition_rule(_col_defs: &[ColumnDef]) -> Result<Partitions, sql::
     };
 
     p
+}
+
+pub fn append_trace_option() -> HashMap<String, String> {
+    let mut table_options = HashMap::new();
+    #[cfg(feature = "enterprise")]
+    table_options.insert(
+        table::requests::TRACE_DATA_HASH.to_string(),
+        "true".to_string(),
+    );
+
+    table_options
 }
 
 pub fn index_columns<'a>(_col_defs: &[ColumnDef]) -> Vec<&'a str> {
