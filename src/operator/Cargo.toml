@@ -6,7 +6,13 @@ license.workspace = true
 
 [features]
 testing = []
-enterprise = ["common-meta/enterprise", "sql/enterprise", "query/enterprise", "prost-types"]
+enterprise = [
+    "common-meta/enterprise",
+    "sql/enterprise",
+    "query/enterprise",
+    "prost-types",
+    "common-frontend/enterprise",
+]
 
 [lints]
 workspace = true

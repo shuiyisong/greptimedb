@@ -15,7 +15,7 @@
 pub mod builder;
 mod grpc;
 mod influxdb;
-mod jaeger;
+pub mod jaeger;
 mod log_handler;
 mod logs;
 mod opentsdb;

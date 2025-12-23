@@ -52,7 +52,7 @@ pub mod query_handler;
 pub mod repeated_field;
 pub mod request_memory_limiter;
 pub mod request_memory_metrics;
-mod row_writer;
+pub mod row_writer;
 pub mod server;
 pub mod tls;
 

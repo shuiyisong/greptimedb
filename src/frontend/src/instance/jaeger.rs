@@ -296,7 +296,7 @@ impl JaegerQueryHandler for Instance {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn query_trace_table(
+pub async fn query_trace_table(
     ctx: QueryContextRef,
     instance: &Instance,
     selects: Vec<SelectExpr>,

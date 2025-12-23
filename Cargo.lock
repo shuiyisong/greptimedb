@@ -2406,6 +2406,7 @@ version = "1.0.0-rc.1"
 dependencies = [
  "api",
  "async-trait",
+ "common-catalog",
  "common-error",
  "common-event-recorder",
  "common-grpc",
@@ -2418,6 +2419,7 @@ dependencies = [
  "serde",
  "session",
  "snafu 0.8.6",
+ "sql",
  "tokio",
  "tonic 0.14.2",
 ]

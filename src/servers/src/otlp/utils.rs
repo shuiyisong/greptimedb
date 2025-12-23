@@ -61,7 +61,7 @@ pub fn key_value_to_jsonb(key_values: Vec<KeyValue>) -> JsonbValue<'static> {
 }
 
 #[inline]
-pub(crate) fn make_string_column_data(
+pub fn make_string_column_data(
     name: &str,
     value: Option<String>,
 ) -> (String, ColumnDataType, Option<ValueData>) {
@@ -73,7 +73,7 @@ pub(crate) fn make_string_column_data(
 }
 
 #[inline]
-pub(crate) fn make_column_data(
+pub fn make_column_data(
     name: &str,
     data_type: ColumnDataType,
     value: Option<ValueData>,

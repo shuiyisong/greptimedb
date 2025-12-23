@@ -20,6 +20,7 @@ use snafu::OptionExt;
 pub mod error;
 pub mod selector;
 pub mod slow_query_event;
+pub mod trace_partition;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct DisplayProcessId {
