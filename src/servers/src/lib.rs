@@ -51,7 +51,7 @@ pub mod proto;
 pub mod query_handler;
 pub mod repeated_field;
 pub mod request_limiter;
-mod row_writer;
+pub mod row_writer;
 pub mod server;
 pub mod tls;
 

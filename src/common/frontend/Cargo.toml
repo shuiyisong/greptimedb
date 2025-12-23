@@ -4,9 +4,16 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+enterprise = []
+
+[lints]
+workspace = true
+
 [dependencies]
 api.workspace = true
 async-trait.workspace = true
+common-catalog.workspace = true
 common-error.workspace = true
 common-event-recorder.workspace = true
 common-grpc.workspace = true
@@ -19,6 +26,7 @@ meta-client.workspace = true
 serde.workspace = true
 session.workspace = true
 snafu.workspace = true
+sql.workspace = true
 tonic.workspace = true
 
 [dev-dependencies]

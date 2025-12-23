@@ -174,7 +174,10 @@ pub fn write_span_to_row(writer: &mut TableData, span: TraceSpan) -> Result<()> 
     Ok(())
 }
 
-fn write_trace_services_to_row(writer: &mut TableData, services: HashSet<String>) -> Result<()> {
+pub fn write_trace_services_to_row(
+    writer: &mut TableData,
+    services: HashSet<String>,
+) -> Result<()> {
     for service_name in services {
         let mut row = writer.alloc_one_row();
         // Write the timestamp as 0.
@@ -198,7 +201,7 @@ fn write_trace_services_to_row(writer: &mut TableData, services: HashSet<String>
     Ok(())
 }
 
-fn write_trace_operations_to_row(
+pub fn write_trace_operations_to_row(
     writer: &mut TableData,
     operations: HashSet<(String, String, String)>,
 ) -> Result<()> {
@@ -230,7 +233,7 @@ fn write_trace_operations_to_row(
     Ok(())
 }
 
-fn write_attributes(
+pub fn write_attributes(
     writer: &mut TableData,
     prefix: &str,
     attributes: Attributes,
