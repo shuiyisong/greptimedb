@@ -18,6 +18,13 @@ use api::v1::ColumnDef;
 use common_catalog::consts::{PARENT_SPAN_ID_COLUMN, SERVICE_NAME_COLUMN, TRACE_ID_COLUMN};
 use sql::statements::create::Partitions;
 
+#[cfg(feature = "enterprise")]
+#[inline]
+fn has_hash_col(col_defs: &[ColumnDef]) -> bool {
+    use common_catalog::consts::TRACE_HASH_COLUMN;
+    col_defs.iter().any(|c| c.name == TRACE_HASH_COLUMN)
+}
+
 pub fn trace_partition_rule(_col_defs: &[ColumnDef]) -> Result<Partitions, sql::error::Error> {
     #[cfg(not(feature = "enterprise"))]
     let p = sql::partition::partition_rule_for_hexstring(TRACE_ID_COLUMN);
@@ -25,7 +32,7 @@ pub fn trace_partition_rule(_col_defs: &[ColumnDef]) -> Result<Partitions, sql::
     let p = {
         use common_catalog::consts::TRACE_HASH_COLUMN;
         use sql::ast::Ident;
-        if _col_defs.iter().any(|c| c.name == TRACE_HASH_COLUMN) {
+        if has_hash_col(_col_defs) {
             use sql::partition::partition_rules_for_u64;
             Ok(Partitions {
                 column_list: vec![Ident::new(TRACE_HASH_COLUMN)],
@@ -41,13 +48,15 @@ pub fn trace_partition_rule(_col_defs: &[ColumnDef]) -> Result<Partitions, sql::
     p
 }
 
-pub fn append_trace_option() -> HashMap<String, String> {
+pub fn append_trace_option(_col_defs: &[ColumnDef]) -> HashMap<String, String> {
     let mut table_options = HashMap::new();
     #[cfg(feature = "enterprise")]
-    table_options.insert(
-        table::requests::TRACE_DATA_HASH.to_string(),
-        "true".to_string(),
-    );
+    if has_hash_col(_col_defs) {
+        table_options.insert(
+            table::requests::TRACE_DATA_HASH.to_string(),
+            "true".to_string(),
+        );
+    }
 
     table_options
 }
@@ -58,7 +67,7 @@ pub fn index_columns<'a>(_col_defs: &[ColumnDef]) -> Vec<&'a str> {
     #[cfg(feature = "enterprise")]
     let columns = {
         use common_catalog::consts::TRACE_HASH_COLUMN;
-        if _col_defs.iter().any(|c| c.name == TRACE_HASH_COLUMN) {
+        if has_hash_col(_col_defs) {
             vec![
                 TRACE_ID_COLUMN,
                 PARENT_SPAN_ID_COLUMN,

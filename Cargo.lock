@@ -2398,6 +2398,7 @@ dependencies = [
  "session",
  "snafu 0.8.6",
  "sql",
+ "table",
  "tokio",
  "tonic 0.14.2",
 ]
