@@ -52,7 +52,7 @@ pub const FILE_TABLE_FORMAT_KEY: &str = "format";
 
 pub const TABLE_DATA_MODEL: &str = "table_data_model";
 pub const TABLE_DATA_MODEL_TRACE_V1: &str = "greptime_trace_v1";
-pub const TRACE_DATA_HASH: &str = "greptime_trace_data_hash";
+pub const TRACE_DATA_HASH: &str = "greptime_trace_id_hash";
 
 pub const OTLP_METRIC_COMPAT_KEY: &str = "otlp_metric_compat";
 pub const OTLP_METRIC_COMPAT_PROM: &str = "prom";
