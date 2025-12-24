@@ -35,11 +35,12 @@ use datafusion::execution::context::SessionContext;
 use datafusion::functions_window::expr_fn::row_number;
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{Expr, ExprFunctionExt, SortExpr, col, lit, lit_timestamp_nano, wildcard};
+use datatypes::arrow::array::StringArray;
 use query::QueryEngineRef;
 use serde_json::Value as JsonValue;
 use servers::error::{
-    CatalogSnafu, CollectRecordbatchSnafu, DataFusionSnafu, Result as ServerResult,
-    TableNotFoundSnafu,
+    CatalogSnafu, CollectRecordbatchSnafu, DataFusionSnafu, InvalidJaegerQuerySnafu,
+    Result as ServerResult, TableNotFoundSnafu,
 };
 use servers::http::jaeger::{JAEGER_QUERY_TABLE_NAME_KEY, QueryTraceParams, TraceUserAgent};
 use servers::otlp::trace::{
@@ -174,58 +175,9 @@ impl JaegerQueryHandler for Instance {
         ctx: QueryContextRef,
         query_params: QueryTraceParams,
     ) -> ServerResult<Output> {
-        let mut filters = vec![];
-
-        // `service_name` is already validated in `from_jaeger_query_params()`, so no additional check needed here.
-        filters.push(col(SERVICE_NAME_COLUMN).eq(lit(query_params.service_name)));
-
-        if let Some(operation_name) = query_params.operation_name {
-            filters.push(col(SPAN_NAME_COLUMN).eq(lit(operation_name)));
-        }
-
-        if let Some(start_time) = query_params.start_time {
-            filters.push(col(TIMESTAMP_COLUMN).gt_eq(lit_timestamp_nano(start_time)));
-        }
-
-        if let Some(end_time) = query_params.end_time {
-            filters.push(col(TIMESTAMP_COLUMN).lt_eq(lit_timestamp_nano(end_time)));
-        }
-
-        if let Some(min_duration) = query_params.min_duration {
-            filters.push(col(DURATION_NANO_COLUMN).gt_eq(lit(min_duration)));
-        }
-
-        if let Some(max_duration) = query_params.max_duration {
-            filters.push(col(DURATION_NANO_COLUMN).lt_eq(lit(max_duration)));
-        }
-
-        // Get all distinct trace ids that match the filters.
-        // It's equivalent to the following SQL query:
-        //
-        // ```
-        // SELECT DISTINCT trace_id
-        // FROM
-        //   {db}.{trace_table}
-        // WHERE
-        //   service_name = '{service_name}' AND
-        //   operation_name = '{operation_name}' AND
-        //   timestamp >= {start_time} AND
-        //   timestamp <= {end_time} AND
-        //   duration >= {min_duration} AND
-        //   duration <= {max_duration}
-        // LIMIT {limit}
-        // ```.
-        let output = query_trace_table(
-            ctx.clone(),
-            self,
-            vec![wildcard()],
-            filters,
-            vec![],
-            Some(query_params.limit.unwrap_or(DEFAULT_LIMIT)),
-            query_params.tags,
-            vec![col(TRACE_ID_COLUMN)],
-        )
-        .await?;
+        let output =
+            query_distinct_trace_ids(ctx.clone(), self, &query_params, vec![col(TRACE_ID_COLUMN)])
+                .await?;
 
         // Get all traces that match the trace ids from the previous query.
         // It's equivalent to the following SQL query:
@@ -239,16 +191,19 @@ impl JaegerQueryHandler for Instance {
         //   timestamp >= {start_time} AND
         //   timestamp <= {end_time}
         // ```
-        let mut filters = vec![
-            col(TRACE_ID_COLUMN).in_list(
-                trace_ids_from_output(output)
-                    .await?
-                    .iter()
-                    .map(lit)
-                    .collect::<Vec<Expr>>(),
-                false,
-            ),
-        ];
+
+        let trace_ids = from_output(output, &[TRACE_ID_COLUMN]).await?;
+        let in_trace_ids = trace_ids
+            .first()
+            .context(InvalidJaegerQuerySnafu {
+                reason: "trace_ids is empty".to_string(),
+            })?
+            .iter()
+            .flatten()
+            .map(lit)
+            .collect::<Vec<Expr>>();
+
+        let mut filters = vec![col(TRACE_ID_COLUMN).in_list(in_trace_ids, false)];
 
         if let Some(start_time) = query_params.start_time {
             filters.push(col(TIMESTAMP_COLUMN).gt_eq(lit_timestamp_nano(start_time)));
@@ -263,11 +218,7 @@ impl JaegerQueryHandler for Instance {
                 // grafana only use trace id and timestamp
                 // clicking the trace id will invoke the query trace api
                 // so we only need to return 1 span for each trace
-                let table_name = ctx
-                    .extension(JAEGER_QUERY_TABLE_NAME_KEY)
-                    .unwrap_or(TRACE_TABLE_NAME);
-
-                let table = get_table(ctx.clone(), self.catalog_manager(), table_name).await?;
+                let table = get_trace_table(ctx.clone(), self.catalog_manager(), None).await?;
 
                 Ok(find_traces_rank_3(
                     table,
@@ -293,6 +244,66 @@ impl JaegerQueryHandler for Instance {
             }
         }
     }
+}
+
+pub async fn query_distinct_trace_ids(
+    ctx: QueryContextRef,
+    instance: &Instance,
+    query_params: &QueryTraceParams,
+    distincts: Vec<Expr>,
+) -> ServerResult<Output> {
+    let mut filters = vec![];
+
+    // `service_name` is already validated in `from_jaeger_query_params()`, so no additional check needed here.
+    filters.push(col(SERVICE_NAME_COLUMN).eq(lit(query_params.service_name.clone())));
+
+    if let Some(operation_name) = &query_params.operation_name {
+        filters.push(col(SPAN_NAME_COLUMN).eq(lit(operation_name)));
+    }
+
+    if let Some(start_time) = query_params.start_time {
+        filters.push(col(TIMESTAMP_COLUMN).gt_eq(lit_timestamp_nano(start_time)));
+    }
+
+    if let Some(end_time) = query_params.end_time {
+        filters.push(col(TIMESTAMP_COLUMN).lt_eq(lit_timestamp_nano(end_time)));
+    }
+
+    if let Some(min_duration) = query_params.min_duration {
+        filters.push(col(DURATION_NANO_COLUMN).gt_eq(lit(min_duration)));
+    }
+
+    if let Some(max_duration) = query_params.max_duration {
+        filters.push(col(DURATION_NANO_COLUMN).lt_eq(lit(max_duration)));
+    }
+
+    // Get all distinct trace ids that match the filters.
+    // It's equivalent to the following SQL query:
+    //
+    // ```
+    // SELECT DISTINCT trace_id
+    // FROM
+    //   {db}.{trace_table}
+    // WHERE
+    //   service_name = '{service_name}' AND
+    //   operation_name = '{operation_name}' AND
+    //   timestamp >= {start_time} AND
+    //   timestamp <= {end_time} AND
+    //   duration >= {min_duration} AND
+    //   duration <= {max_duration}
+    // LIMIT {limit}
+    // ```.
+    query_trace_table(
+        ctx.clone(),
+        instance,
+        vec![wildcard()],
+        filters,
+        vec![],
+        Some(query_params.limit.unwrap_or(DEFAULT_LIMIT)),
+        query_params.tags.clone(),
+        distincts,
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -328,7 +339,7 @@ pub async fn query_trace_table(
         }
     };
 
-    let table = get_table(ctx.clone(), instance.catalog_manager(), table_name).await?;
+    let table = get_trace_table(ctx.clone(), instance.catalog_manager(), Some(table_name)).await?;
     let is_data_model_v1 =
         check_table_option(table.clone(), TABLE_DATA_MODEL, TABLE_DATA_MODEL_TRACE_V1);
 
@@ -391,11 +402,16 @@ pub async fn query_trace_table(
     Ok(output)
 }
 
-pub async fn get_table(
+pub async fn get_trace_table(
     ctx: QueryContextRef,
     catalog_manager: &CatalogManagerRef,
-    table_name: &str,
+    table_name: Option<&str>,
 ) -> ServerResult<TableRef> {
+    let table_name = table_name.unwrap_or_else(|| {
+        ctx.extension(JAEGER_QUERY_TABLE_NAME_KEY)
+            .unwrap_or(TRACE_TABLE_NAME)
+    });
+
     catalog_manager
         .table(
             ctx.current_catalog(),
@@ -424,7 +440,7 @@ pub fn check_table_option(table: TableRef, option_key: &str, option_value: &str)
         == Some(option_value)
 }
 
-async fn find_traces_rank_3(
+pub async fn find_traces_rank_3(
     table: TableRef,
     query_engine: &QueryEngineRef,
     filters: Vec<Expr>,
@@ -662,27 +678,35 @@ fn tags_filters(
 }
 
 // Get trace ids from the output in recordbatches.
-async fn trace_ids_from_output(output: Output) -> ServerResult<Vec<String>> {
+pub async fn from_output(output: Output, cols: &[&str]) -> ServerResult<Vec<StringArray>> {
     if let OutputData::Stream(stream) = output.data {
         let schema = stream.schema().clone();
         let recordbatches = util::collect(stream)
             .await
             .context(CollectRecordbatchSnafu)?;
 
-        // Only contains `trace_id` column in string type.
         if !recordbatches.is_empty()
-            && schema.num_columns() == 1
-            && schema.contains_column(TRACE_ID_COLUMN)
+            && schema.num_columns() == cols.len()
+            && cols.iter().all(|col| schema.contains_column(col))
         {
-            let mut trace_ids = vec![];
+            let mut result = Vec::with_capacity(cols.len());
             for recordbatch in recordbatches {
-                recordbatch
-                    .iter_column_as_string(0)
-                    .flatten()
-                    .for_each(|x| trace_ids.push(x));
+                for col_name in cols {
+                    let c = recordbatch
+                        .column_by_name(col_name)
+                        .context(InvalidJaegerQuerySnafu {
+                            reason: format!("column {} not found in recordbatch", col_name),
+                        })?
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .context(InvalidJaegerQuerySnafu {
+                            reason: format!("column {} is not a string array", col_name),
+                        })?;
+                    result.push(c.clone());
+                }
             }
 
-            return Ok(trace_ids);
+            return Ok(result);
         }
     }
 
