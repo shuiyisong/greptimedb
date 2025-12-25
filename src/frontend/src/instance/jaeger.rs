@@ -35,7 +35,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion::functions_window::expr_fn::row_number;
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{Expr, ExprFunctionExt, SortExpr, col, lit, lit_timestamp_nano, wildcard};
-use datatypes::arrow::array::StringArray;
+use datatypes::arrow::array::{ArrayRef, StringArray};
 use query::QueryEngineRef;
 use serde_json::Value as JsonValue;
 use servers::error::{
@@ -197,6 +197,11 @@ impl JaegerQueryHandler for Instance {
             .first()
             .context(InvalidJaegerQuerySnafu {
                 reason: "trace_ids is empty".to_string(),
+            })?
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .context(InvalidJaegerQuerySnafu {
+                reason: "trace_ids is not a string array".to_string(),
             })?
             .iter()
             .flatten()
@@ -678,7 +683,7 @@ fn tags_filters(
 }
 
 // Get trace ids from the output in recordbatches.
-pub async fn from_output(output: Output, cols: &[&str]) -> ServerResult<Vec<StringArray>> {
+pub async fn from_output(output: Output, cols: &[&str]) -> ServerResult<Vec<ArrayRef>> {
     if let OutputData::Stream(stream) = output.data {
         let schema = stream.schema().clone();
         let recordbatches = util::collect(stream)
@@ -692,16 +697,12 @@ pub async fn from_output(output: Output, cols: &[&str]) -> ServerResult<Vec<Stri
             let mut result = Vec::with_capacity(cols.len());
             for recordbatch in recordbatches {
                 for col_name in cols {
-                    let c = recordbatch
-                        .column_by_name(col_name)
-                        .context(InvalidJaegerQuerySnafu {
-                            reason: format!("column {} not found in recordbatch", col_name),
-                        })?
-                        .as_any()
-                        .downcast_ref::<StringArray>()
-                        .context(InvalidJaegerQuerySnafu {
-                            reason: format!("column {} is not a string array", col_name),
-                        })?;
+                    let c =
+                        recordbatch
+                            .column_by_name(col_name)
+                            .context(InvalidJaegerQuerySnafu {
+                                reason: format!("column {} not found in recordbatch", col_name),
+                            })?;
                     result.push(c.clone());
                 }
             }
