@@ -5282,6 +5282,7 @@ version = "1.0.0-beta.4"
 dependencies = [
  "api",
  "arc-swap",
+ "arrow",
  "async-stream",
  "async-trait",
  "auth",
