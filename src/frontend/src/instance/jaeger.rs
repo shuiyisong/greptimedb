@@ -35,11 +35,12 @@ use datafusion::execution::context::SessionContext;
 use datafusion::functions_window::expr_fn::row_number;
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{Expr, ExprFunctionExt, SortExpr, col, lit, lit_timestamp_nano, wildcard};
+use datatypes::arrow;
 use datatypes::arrow::array::{ArrayRef, StringArray};
 use query::QueryEngineRef;
 use serde_json::Value as JsonValue;
 use servers::error::{
-    CatalogSnafu, CollectRecordbatchSnafu, DataFusionSnafu, InvalidJaegerQuerySnafu,
+    ArrowSnafu, CatalogSnafu, CollectRecordbatchSnafu, DataFusionSnafu, InvalidJaegerQuerySnafu,
     Result as ServerResult, TableNotFoundSnafu,
 };
 use servers::http::jaeger::{JAEGER_QUERY_TABLE_NAME_KEY, QueryTraceParams, TraceUserAgent};
@@ -695,16 +696,22 @@ pub async fn from_output(output: Output, cols: &[&str]) -> ServerResult<Vec<Arra
             && cols.iter().all(|col| schema.contains_column(col))
         {
             let mut result = Vec::with_capacity(cols.len());
-            for recordbatch in recordbatches {
-                for col_name in cols {
-                    let c =
-                        recordbatch
-                            .column_by_name(col_name)
-                            .context(InvalidJaegerQuerySnafu {
-                                reason: format!("column {} not found in recordbatch", col_name),
-                            })?;
-                    result.push(c.clone());
-                }
+
+            // safe to unwrap as checked is_empty
+            let s = recordbatches.first().unwrap().schema.arrow_schema();
+            let r = arrow::compute::concat_batches(
+                s,
+                recordbatches.iter().map(|x| x.df_record_batch()),
+            )
+            .context(ArrowSnafu)?;
+
+            for col_name in cols {
+                let c = r
+                    .column_by_name(col_name)
+                    .context(InvalidJaegerQuerySnafu {
+                        reason: format!("column {} not found in recordbatch", col_name),
+                    })?;
+                result.push(c.clone());
             }
 
             return Ok(result);
