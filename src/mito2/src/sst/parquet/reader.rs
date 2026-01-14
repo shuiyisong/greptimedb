@@ -1425,6 +1425,10 @@ pub struct ReaderMetrics {
     pub(crate) metadata_cache_metrics: MetadataCacheMetrics,
     /// Optional metrics for page/row group fetch operations.
     pub(crate) fetch_metrics: Option<Arc<ParquetFetchMetrics>>,
+    /// Memory size of metadata loaded for building file ranges.
+    pub(crate) metadata_mem_size: usize,
+    /// Number of file range builders created.
+    pub(crate) num_range_builders: usize,
 }
 
 impl ReaderMetrics {
@@ -1445,6 +1449,8 @@ impl ReaderMetrics {
                 self.fetch_metrics = Some(other_fetch.clone());
             }
         }
+        self.metadata_mem_size += other.metadata_mem_size;
+        self.num_range_builders += other.num_range_builders;
     }
 
     /// Reports total rows.

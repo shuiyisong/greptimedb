@@ -225,6 +225,15 @@ pub(crate) struct ScanMetricsSet {
     metadata_cache_metrics: Option<MetadataCacheMetrics>,
     /// Per-file scan metrics, only populated when explain_verbose is true.
     per_file_metrics: Option<HashMap<RegionFileId, FileScanMetrics>>,
+
+    /// Current memory usage for file range builders.
+    build_ranges_mem_size: usize,
+    /// Peak memory usage for file range builders.
+    build_ranges_peak_mem_size: usize,
+    /// Current number of file range builders.
+    num_range_builders: usize,
+    /// Peak number of file range builders.
+    num_peak_range_builders: usize,
 }
 
 /// Wrapper for file metrics that compares by total cost in reverse order.
@@ -313,6 +322,10 @@ impl fmt::Debug for ScanMetricsSet {
             fetch_metrics,
             metadata_cache_metrics,
             per_file_metrics,
+            build_ranges_mem_size: _,
+            build_ranges_peak_mem_size,
+            num_range_builders: _,
+            num_peak_range_builders,
         } = self;
 
         // Write core metrics
@@ -534,7 +547,12 @@ impl fmt::Debug for ScanMetricsSet {
             write!(f, "}}")?;
         }
 
-        write!(f, ", \"stream_eof\":{stream_eof}}}")
+        write!(
+            f,
+            ", \"build_ranges_peak_mem_size\":{build_ranges_peak_mem_size}, \
+             \"num_peak_range_builders\":{num_peak_range_builders}, \
+             \"stream_eof\":{stream_eof}}}"
+        )
     }
 }
 impl ScanMetricsSet {
@@ -599,6 +617,8 @@ impl ScanMetricsSet {
             scan_cost,
             metadata_cache_metrics,
             fetch_metrics,
+            metadata_mem_size,
+            num_range_builders,
         } = other;
 
         self.build_parts_cost += *build_cost;
@@ -653,6 +673,24 @@ impl ScanMetricsSet {
         self.metadata_cache_metrics
             .get_or_insert_with(MetadataCacheMetrics::default)
             .merge_from(metadata_cache_metrics);
+
+        // Track memory usage and update peak.
+        self.build_ranges_mem_size += *metadata_mem_size;
+        if self.build_ranges_mem_size > self.build_ranges_peak_mem_size {
+            self.build_ranges_peak_mem_size = self.build_ranges_mem_size;
+        }
+
+        // Track number of builders and update peak.
+        self.num_range_builders += *num_range_builders;
+        if self.num_range_builders > self.num_peak_range_builders {
+            self.num_peak_range_builders = self.num_range_builders;
+        }
+    }
+
+    /// Subtracts stats when clearing file range builders.
+    fn sub_build_ranges_stats(&mut self, mem_size: usize, num_builders: usize) {
+        self.build_ranges_mem_size = self.build_ranges_mem_size.saturating_sub(mem_size);
+        self.num_range_builders = self.num_range_builders.saturating_sub(num_builders);
     }
 
     /// Merges per-file metrics.
@@ -1009,6 +1047,12 @@ impl PartitionMetrics {
     /// Returns a DedupMetricsReport trait object for reporting dedup metrics.
     pub(crate) fn dedup_metrics_reporter(&self) -> Arc<dyn DedupMetricsReport> {
         self.0.clone()
+    }
+
+    /// Subtracts stats for building file ranges.
+    pub(crate) fn sub_build_ranges_stats(&self, mem_size: usize, num_builders: usize) {
+        let mut metrics = self.0.metrics.lock().unwrap();
+        metrics.sub_build_ranges_stats(mem_size, num_builders);
     }
 }
 
@@ -1491,6 +1535,31 @@ pub(crate) async fn maybe_scan_flat_other_ranges(
         reason: "no other ranges scannable in flat format",
     }
     .fail()
+}
+
+/// Clears the file range builders for the given partition range.
+/// This should be called after finishing scanning a partition range to release memory.
+pub(crate) fn clear_file_range_builders(
+    stream_ctx: &StreamContext,
+    range_builder_list: &RangeBuilderList,
+    part_range_id: usize,
+    part_metrics: &PartitionMetrics,
+) {
+    let range_meta = &stream_ctx.ranges[part_range_id];
+    let num_memtables = stream_ctx.input.num_memtables();
+
+    // Collect file indices from the range meta
+    // is_file_range_index already checks idx.index >= num_memtables
+    let file_indices = range_meta.row_group_indices.iter().filter_map(|idx| {
+        if stream_ctx.is_file_range_index(*idx) {
+            Some(idx.index - num_memtables)
+        } else {
+            None
+        }
+    });
+
+    let (memory_freed, num_cleared) = range_builder_list.clear_file_builders(file_indices);
+    part_metrics.sub_build_ranges_stats(memory_freed, num_cleared);
 }
 
 /// A stream wrapper that splits record batches from an inner stream.
