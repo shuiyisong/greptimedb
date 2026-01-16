@@ -28,7 +28,7 @@ use common_function::scalars::udf::create_udf;
 use common_query::{Output, OutputData};
 use common_recordbatch::adapter::RecordBatchStreamAdapter;
 use common_recordbatch::util;
-use common_telemetry::warn;
+use common_telemetry::{info, warn};
 use datafusion::dataframe::DataFrame;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::context::SessionContext;
@@ -397,6 +397,8 @@ pub async fn query_trace_table(
     } else {
         dataframe
     };
+
+    info!("logical plan: {:?}", dataframe.logical_plan());
 
     // Execute the query and collect the result.
     let stream = dataframe.execute_stream().await.context(DataFusionSnafu)?;
