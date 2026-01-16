@@ -49,7 +49,7 @@ pub fn trace_partition_rule(_col_defs: &[ColumnDef]) -> Result<Partitions, sql::
 }
 
 pub fn append_trace_option(_col_defs: &[ColumnDef]) -> HashMap<String, String> {
-    let table_options = HashMap::new();
+    let mut table_options = HashMap::new();
     #[cfg(feature = "enterprise")]
     if has_hash_col(_col_defs) {
         table_options.insert(
