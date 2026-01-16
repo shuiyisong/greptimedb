@@ -100,13 +100,13 @@ rust.unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)'] }
 # See for more detaiils: https://github.com/rust-lang/cargo/issues/11329
 ahash = { version = "0.8", features = ["compile-time-rng"] }
 aquamarine = "0.6"
-arrow = { version = "57.0", features = ["prettyprint"] }
-arrow-array = { version = "57.0", default-features = false, features = ["chrono-tz"] }
-arrow-buffer = "57.0"
-arrow-cast = "57.0"
-arrow-flight = "57.0"
-arrow-ipc = { version = "57.0", default-features = false, features = ["lz4", "zstd"] }
-arrow-schema = { version = "57.0", features = ["serde"] }
+arrow = { version = "=57.0.0", features = ["prettyprint"] }
+arrow-array = { version = "=57.0.0", default-features = false, features = ["chrono-tz"] }
+arrow-buffer = "=57.0.0"
+arrow-cast = "=57.0.0"
+arrow-flight = "=57.0.0"
+arrow-ipc = { version = "=57.0.0", default-features = false, features = ["lz4", "zstd"] }
+arrow-schema = { version = "=57.0.0", features = ["serde"] }
 async-stream = "0.3"
 async-trait = "0.1"
 # Remember to update axum-extra, axum-macros when updating axum
@@ -191,8 +191,8 @@ pin-project = "1.0"
 pretty_assertions = "1.4.0"
 prometheus = { version = "0.13.3", features = ["process"] }
 promql-parser = { version = "0.7.1", features = ["ser"] }
-prost = { version = "0.14.1", features = ["no-recursion-limit"] }
-prost-types = "0.14.1"
+prost = { version = "=0.14.1", features = ["no-recursion-limit"] }
+prost-types = "=0.14.1"
 raft-engine = { version = "0.4.1", default-features = false }
 rand = "0.9"
 ratelimit = "0.10"
