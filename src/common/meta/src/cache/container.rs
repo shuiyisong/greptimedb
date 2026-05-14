@@ -196,8 +196,8 @@ where
 #[async_trait::async_trait]
 impl<K, V> CacheInvalidator for CacheContainer<K, V, CacheIdent>
 where
-    K: Send + Sync,
-    V: Send + Sync,
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
 {
     async fn invalidate(&self, _ctx: &Context, caches: &[CacheIdent]) -> Result<()> {
         let idents = caches
@@ -209,6 +209,14 @@ where
             (self.invalidator)(&self.cache, &idents).await?;
         }
 
+        Ok(())
+    }
+
+    async fn invalidate_all(&self, _ctx: &Context) -> Result<()> {
+        // Bump the version before clearing so VersionChecked readers retry if a
+        // full-cache reset races with cache-miss initialization.
+        self.inc_version();
+        self.cache.invalidate_all();
         Ok(())
     }
 }

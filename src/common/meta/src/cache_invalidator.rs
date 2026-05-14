@@ -55,6 +55,16 @@ pub struct Context {
 pub trait CacheInvalidator: Send + Sync {
     async fn invalidate(&self, ctx: &Context, caches: &[CacheIdent]) -> Result<()>;
 
+    /// Invalidates every cache entry known to this invalidator.
+    ///
+    /// Implementations that forward invalidation to an external metadata service
+    /// may keep the default no-op behavior. In-process cache registries should
+    /// override this so lifecycle code can discard local volatile metadata before
+    /// the process becomes writable again.
+    async fn invalidate_all(&self, _ctx: &Context) -> Result<()> {
+        Ok(())
+    }
+
     fn name(&self) -> &'static str {
         std::any::type_name::<Self>()
     }

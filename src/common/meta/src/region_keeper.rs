@@ -116,7 +116,10 @@ impl MemoryRegionKeeper {
         self.len() == 0
     }
 
-    #[cfg(test)]
+    /// Clears all in-memory region-operation guards.
+    ///
+    /// This is intended for lifecycle resets where the durable metadata store is
+    /// treated as the source of truth and local volatile state must be discarded.
     pub fn clear(&self) {
         let mut inner = self.inner.write().unwrap();
         inner.clear();

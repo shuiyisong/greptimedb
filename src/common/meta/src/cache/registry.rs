@@ -67,6 +67,16 @@ impl CacheInvalidator for LayeredCacheRegistry {
         }
         results.into_iter().collect::<Result<Vec<_>>>().map(|_| ())
     }
+
+    async fn invalidate_all(&self, ctx: &Context) -> Result<()> {
+        // Preserve the same layer ordering as targeted invalidation: upper
+        // layers may depend on lower layers being reset first.
+        let mut results = Vec::with_capacity(self.layers.len());
+        for registry in &self.layers {
+            results.push(registry.invalidate_all(ctx).await);
+        }
+        results.into_iter().collect::<Result<Vec<_>>>().map(|_| ())
+    }
 }
 
 impl LayeredCacheRegistry {
@@ -118,6 +128,20 @@ impl CacheInvalidator for CacheRegistry {
             .indexes
             .iter()
             .map(|invalidator| invalidator.invalidate(ctx, caches));
+        join_all(tasks)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+        Ok(())
+    }
+
+    async fn invalidate_all(&self, ctx: &Context) -> Result<()> {
+        // Entries inside one registry are independent, so fan out just like
+        // targeted invalidation does.
+        let tasks = self
+            .indexes
+            .iter()
+            .map(|invalidator| invalidator.invalidate_all(ctx));
         join_all(tasks)
             .await
             .into_iter()
