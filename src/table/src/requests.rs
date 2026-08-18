@@ -104,6 +104,9 @@ pub const DDL_WAIT: &str = "wait";
 
 pub const VALID_DDL_OPTION_KEYS: [&str; 2] = [DDL_TIMEOUT, DDL_WAIT];
 
+/// The key of ingest rows rate limit option (rows per second, cluster-wide) in database options.
+pub const INGEST_ROWS_RATE_LIMIT_KEY: &str = "ingest_rows_rate_limit";
+
 // Valid option keys when creating a db.
 static VALID_DB_OPT_KEYS: Lazy<HashSet<&str>> = Lazy::new(|| {
     let mut set = HashSet::new();
@@ -127,6 +130,7 @@ static VALID_DB_OPT_KEYS: Lazy<HashSet<&str>> = Lazy::new(|| {
     set.insert(TWCS_INACTIVE_WINDOW_L1_MERGE_TRIGGER);
     set.insert(TWCS_MAX_OUTPUT_FILE_SIZE);
     set.insert(SST_FORMAT_KEY);
+    set.insert(INGEST_ROWS_RATE_LIMIT_KEY);
     set
 });
 
@@ -920,6 +924,8 @@ mod tests {
         assert!(validate_database_option(
             "compaction.twcs.inactive_window.l1_merge_trigger"
         ));
+        assert!(validate_database_option(INGEST_ROWS_RATE_LIMIT_KEY));
+        assert!(validate_database_option("ingest_rows_rate_limit"));
         assert!(!validate_database_option("foo"));
     }
 
