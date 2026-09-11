@@ -299,6 +299,8 @@ pub async fn instant_query(
     Extension(mut query_ctx): Extension<QueryContext>,
     Form(form_params): Form<InstantQuery>,
 ) -> PrometheusJsonResponse {
+    debug!("Prometheus instant query request body: {form_params:?}");
+
     // Extract time from query string, or use current server time if not specified.
     let time = params
         .time

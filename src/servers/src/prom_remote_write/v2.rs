@@ -34,8 +34,8 @@ use snafu::{OptionExt, ResultExt, ensure};
 
 use crate::error::{self, Result};
 use crate::prom_remote_write::row_builder::PromCtx;
-use crate::prom_remote_write::try_decompress;
 use crate::prom_remote_write::validation::validate_label_name;
+use crate::prom_remote_write::{log_decoded_write_request, try_decompress};
 #[allow(deprecated)]
 use crate::prom_store::{
     DATABASE_LABEL, DATABASE_LABEL_ALT, METRIC_NAME_LABEL, PHYSICAL_TABLE_LABEL,
@@ -59,6 +59,7 @@ pub(crate) fn decode_remote_write_v2_request(is_zstd: bool, body: Bytes) -> Resu
     } else {
         try_decompress(!is_zstd, &body[..])?
     };
+    log_decoded_write_request::<Request>("2.0", &buf);
 
     Request::decode(&buf[..]).context(error::DecodePromRemoteRequestSnafu)
 }

@@ -27,6 +27,7 @@ pub(crate) mod v2;
 pub mod validation;
 
 use bytes::Bytes;
+use common_telemetry::{debug, tracing};
 use lazy_static::lazy_static;
 use object_pool::Pool;
 use snafu::ResultExt;
@@ -50,6 +51,27 @@ pub fn try_decompress(is_zstd: bool, body: &[u8]) -> crate::error::Result<Vec<u8
     }
 }
 
+/// Logs the decoded remote write request body at the debug level.
+///
+/// The decoders are row-oriented and do not keep the wire message around, so
+/// this makes an extra pass over the already decompressed payload to rebuild it.
+/// That extra pass only runs when debug logging is enabled.
+pub(crate) fn log_decoded_write_request<M>(version: &str, buf: &[u8])
+where
+    M: prost::Message + std::fmt::Debug + Default,
+{
+    if !tracing::enabled!(tracing::Level::DEBUG) {
+        return;
+    }
+
+    match M::decode(buf) {
+        Ok(request) => debug!("Prometheus remote write v{version} request body: {request:?}"),
+        Err(err) => debug!(
+            "Failed to decode Prometheus remote write v{version} request body for logging: {err:?}"
+        ),
+    }
+}
+
 pub fn decode_remote_write_request(
     is_zstd: bool,
     body: Bytes,
@@ -70,6 +92,8 @@ pub fn decode_remote_write_request(
         // fallback to the other compression method
         try_decompress(!is_zstd, &body[..])?
     };
+
+    log_decoded_write_request::<api::prom_store::remote::WriteRequest>("1.0", &buf);
 
     let mut request = PROM_WRITE_REQUEST_POOL.pull(PromWriteRequest::default);
 
