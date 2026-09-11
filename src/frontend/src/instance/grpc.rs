@@ -453,6 +453,7 @@ impl Instance {
                         request.flight_data,
                         request.record_batch,
                         request.schema_bytes,
+                        ctx.channel(),
                     )
                     .await
                     .context(TableOperationSnafu)?;
