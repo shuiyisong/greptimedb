@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::borrow::Cow;
+
 use ahash::HashSet;
 use api::v1::{RowInsertRequests, Value};
 use common_grpc::precision::Precision;
@@ -97,23 +99,23 @@ const OTEL_SCOPE_SCHEMA_URL: &str = "schema_url";
 /// Returns `InsertRequests`, total number of rows to ingest, and the per-table
 /// semantic index for the auto-create path to stamp as table options.
 pub fn to_grpc_insert_requests(
-    request: ExportMetricsServiceRequest,
+    mut request: ExportMetricsServiceRequest,
     metric_ctx: &mut OtlpMetricCtx,
 ) -> Result<(RowInsertRequests, usize, SemanticIndex)> {
     let mut table_writer = MultiTableData::default();
     let mut semantic_index = SemanticIndex::default();
 
-    for resource in &request.resource_metrics {
+    for resource in &mut request.resource_metrics {
         let resource_attrs = resource.resource.as_ref().map(|r| {
             let mut attrs = r.attributes.clone();
             process_resource_attrs(&mut attrs, metric_ctx);
             attrs
         });
 
-        for scope in &resource.scope_metrics {
+        for scope in &mut resource.scope_metrics {
             let scope_attrs = process_scope_attrs(scope, metric_ctx);
 
-            for metric in &scope.metrics {
+            for metric in &mut scope.metrics {
                 if metric.data.is_none() {
                     continue;
                 }
@@ -311,7 +313,7 @@ fn process_scope_attrs(scope: &ScopeMetrics, metric_ctx: &OtlpMetricCtx) -> Opti
 
 fn encode_metrics(
     table_writer: &mut MultiTableData,
-    metric: &Metric,
+    metric: &mut Metric,
     resource_attrs: Option<&Vec<KeyValue>>,
     scope_attrs: Option<&Vec<KeyValue>>,
     metric_ctx: &OtlpMetricCtx,
@@ -332,7 +334,7 @@ fn encode_metrics(
     // encoders) along with the declared type/temporality.
     record_metric_semantics(semantic_index, metric, &name, metric_ctx);
 
-    if let Some(data) = &metric.data {
+    if let Some(data) = &mut metric.data {
         match data {
             metric::Data::Gauge(gauge) => {
                 encode_gauge(
@@ -390,6 +392,23 @@ enum AttributeType {
     Legacy,
 }
 
+fn attribute_key<'a>(
+    name: &'a str,
+    attribute_type: AttributeType,
+    metric_ctx: &OtlpMetricCtx,
+) -> Cow<'a, str> {
+    match attribute_type {
+        AttributeType::Resource | AttributeType::DataPoint => {
+            translate_label_name(name, metric_ctx.metric_translation_strategy)
+        }
+        AttributeType::Scope => Cow::Owned(format!(
+            "otel_scope_{}",
+            translate_label_name(name, metric_ctx.metric_translation_strategy)
+        )),
+        AttributeType::Legacy => Cow::Owned(legacy_normalize_otlp_name(name)),
+    }
+}
+
 fn write_attributes(
     writer: &mut TableData,
     row: &mut Vec<Value>,
@@ -402,33 +421,48 @@ fn write_attributes(
     };
 
     let tags = attrs.iter().filter_map(|attr| {
-        attr.value
-            .as_ref()
-            .and_then(|v| v.value.as_ref())
-            .and_then(|val| {
-                let key = match attribute_type {
-                    AttributeType::Resource | AttributeType::DataPoint => {
-                        translate_label_name(&attr.key, metric_ctx.metric_translation_strategy)
-                    }
-                    AttributeType::Scope => {
-                        format!(
-                            "otel_scope_{}",
-                            translate_label_name(&attr.key, metric_ctx.metric_translation_strategy)
-                        )
-                    }
-                    AttributeType::Legacy => legacy_normalize_otlp_name(&attr.key),
-                };
-                match val {
-                    any_value::Value::StringValue(s) => Some((key, s.clone())),
-                    any_value::Value::IntValue(v) => Some((key, v.to_string())),
-                    any_value::Value::DoubleValue(v) => Some((key, v.to_string())),
-                    _ => None, // TODO(sunng87): allow different type of values
-                }
-            })
+        let value = match attr.value.as_ref()?.value.as_ref()? {
+            any_value::Value::StringValue(value) => value.clone(),
+            any_value::Value::IntValue(value) => value.to_string(),
+            any_value::Value::DoubleValue(value) => value.to_string(),
+            _ => return None, // TODO(sunng87): allow different type of values
+        };
+        Some((attribute_key(&attr.key, attribute_type, metric_ctx), value))
     });
     row_writer::write_tags(writer, tags, row)?;
 
     Ok(())
+}
+
+fn write_owned_attributes(
+    writer: &mut TableData,
+    row: &mut Vec<Value>,
+    attrs: Vec<KeyValue>,
+    attribute_type: AttributeType,
+    metric_ctx: &OtlpMetricCtx,
+) -> Result<()> {
+    let mut tags = Vec::with_capacity(attrs.len());
+    for attr in attrs {
+        let value = match attr.value.and_then(|value| value.value) {
+            Some(any_value::Value::StringValue(value)) => value,
+            Some(any_value::Value::IntValue(value)) => value.to_string(),
+            Some(any_value::Value::DoubleValue(value)) => value.to_string(),
+            _ => continue,
+        };
+        let key = match attribute_key(&attr.key, attribute_type, metric_ctx) {
+            Cow::Borrowed(_) => attr.key,
+            Cow::Owned(key) => key,
+        };
+        tags.push((key, value));
+    }
+    row_writer::write_tags(writer, tags.into_iter(), row)
+}
+
+enum DataPointAttributes<'a> {
+    // Histograms and summaries fan out the same attributes into multiple rows.
+    Borrowed(&'a Vec<KeyValue>),
+    // Gauge/sum points emit one row, so their strings can move into that row.
+    Owned(Vec<KeyValue>),
 }
 
 fn write_timestamp(
@@ -480,7 +514,7 @@ fn write_tags_and_timestamp(
     row: &mut Vec<Value>,
     resource_attrs: Option<&Vec<KeyValue>>,
     scope_attrs: Option<&Vec<KeyValue>>,
-    data_point_attrs: Option<&Vec<KeyValue>>,
+    data_point_attrs: DataPointAttributes<'_>,
     timestamp_nanos: i64,
     metric_ctx: &OtlpMetricCtx,
 ) -> Result<()> {
@@ -493,13 +527,6 @@ fn write_tags_and_timestamp(
             metric_ctx,
         )?;
         write_attributes(table, row, scope_attrs, AttributeType::Legacy, metric_ctx)?;
-        write_attributes(
-            table,
-            row,
-            data_point_attrs,
-            AttributeType::Legacy,
-            metric_ctx,
-        )?;
     } else {
         // TODO(shuiyisong): check `__type__` and `__unit__` tags in prometheus
         write_attributes(
@@ -510,13 +537,20 @@ fn write_tags_and_timestamp(
             metric_ctx,
         )?;
         write_attributes(table, row, scope_attrs, AttributeType::Scope, metric_ctx)?;
-        write_attributes(
-            table,
-            row,
-            data_point_attrs,
-            AttributeType::DataPoint,
-            metric_ctx,
-        )?;
+    }
+
+    let attribute_type = if metric_ctx.is_legacy {
+        AttributeType::Legacy
+    } else {
+        AttributeType::DataPoint
+    };
+    match data_point_attrs {
+        DataPointAttributes::Borrowed(attrs) => {
+            write_attributes(table, row, Some(attrs), attribute_type, metric_ctx)?
+        }
+        DataPointAttributes::Owned(attrs) => {
+            write_owned_attributes(table, row, attrs, attribute_type, metric_ctx)?
+        }
     }
 
     write_timestamp(table, row, timestamp_nanos, metric_ctx.is_legacy)?;
@@ -531,7 +565,7 @@ fn write_tags_and_timestamp(
 fn encode_gauge(
     table_writer: &mut MultiTableData,
     name: &str,
-    gauge: &Gauge,
+    gauge: &mut Gauge,
     resource_attrs: Option<&Vec<KeyValue>>,
     scope_attrs: Option<&Vec<KeyValue>>,
     metric_ctx: &OtlpMetricCtx,
@@ -542,14 +576,14 @@ fn encode_gauge(
         gauge.data_points.len(),
     );
 
-    for data_point in &gauge.data_points {
+    for data_point in &mut gauge.data_points {
         let mut row = table.alloc_one_row();
         write_tags_and_timestamp(
             table,
             &mut row,
             resource_attrs,
             scope_attrs,
-            Some(data_point.attributes.as_ref()),
+            DataPointAttributes::Owned(std::mem::take(&mut data_point.attributes)),
             data_point.time_unix_nano as i64,
             metric_ctx,
         )?;
@@ -567,7 +601,7 @@ fn encode_gauge(
 fn encode_sum(
     table_writer: &mut MultiTableData,
     name: &str,
-    sum: &Sum,
+    sum: &mut Sum,
     resource_attrs: Option<&Vec<KeyValue>>,
     scope_attrs: Option<&Vec<KeyValue>>,
     metric_ctx: &OtlpMetricCtx,
@@ -578,14 +612,14 @@ fn encode_sum(
         sum.data_points.len(),
     );
 
-    for data_point in &sum.data_points {
+    for data_point in &mut sum.data_points {
         let mut row = table.alloc_one_row();
         write_tags_and_timestamp(
             table,
             &mut row,
             resource_attrs,
             scope_attrs,
-            Some(data_point.attributes.as_ref()),
+            DataPointAttributes::Owned(std::mem::take(&mut data_point.attributes)),
             data_point.time_unix_nano as i64,
             metric_ctx,
         )?;
@@ -638,7 +672,7 @@ fn encode_histogram(
                 &mut bucket_row,
                 resource_attrs,
                 scope_attrs,
-                Some(data_point.attributes.as_ref()),
+                DataPointAttributes::Borrowed(&data_point.attributes),
                 data_point.time_unix_nano as i64,
                 metric_ctx,
             )?;
@@ -678,7 +712,7 @@ fn encode_histogram(
                 &mut sum_row,
                 resource_attrs,
                 scope_attrs,
-                Some(data_point.attributes.as_ref()),
+                DataPointAttributes::Borrowed(&data_point.attributes),
                 data_point.time_unix_nano as i64,
                 metric_ctx,
             )?;
@@ -693,7 +727,7 @@ fn encode_histogram(
             &mut count_row,
             resource_attrs,
             scope_attrs,
-            Some(data_point.attributes.as_ref()),
+            DataPointAttributes::Borrowed(&data_point.attributes),
             data_point.time_unix_nano as i64,
             metric_ctx,
         )?;
@@ -742,7 +776,7 @@ fn encode_summary(
                 &mut row,
                 resource_attrs,
                 scope_attrs,
-                Some(data_point.attributes.as_ref()),
+                DataPointAttributes::Borrowed(&data_point.attributes),
                 data_point.time_unix_nano as i64,
                 metric_ctx,
             )?;
@@ -783,7 +817,7 @@ fn encode_summary(
                         &mut row,
                         resource_attrs,
                         scope_attrs,
-                        Some(data_point.attributes.as_ref()),
+                        DataPointAttributes::Borrowed(&data_point.attributes),
                         data_point.time_unix_nano as i64,
                         metric_ctx,
                     )?;
@@ -809,7 +843,7 @@ fn encode_summary(
                     &mut row,
                     resource_attrs,
                     scope_attrs,
-                    Some(data_point.attributes.as_ref()),
+                    DataPointAttributes::Borrowed(&data_point.attributes),
                     data_point.time_unix_nano as i64,
                     metric_ctx,
                 )?;
@@ -836,7 +870,7 @@ fn encode_summary(
                     &mut row,
                     resource_attrs,
                     scope_attrs,
-                    Some(data_point.attributes.as_ref()),
+                    DataPointAttributes::Borrowed(&data_point.attributes),
                     data_point.time_unix_nano as i64,
                     metric_ctx,
                 )?;
@@ -874,6 +908,86 @@ mod tests {
     }
 
     #[test]
+    fn owned_scalar_attributes_preserve_borrowed_row_semantics() {
+        use session::protocol_ctx::OtlpMetricTranslationStrategy::*;
+
+        let resource = vec![keyvalue("shared.key", "resource")];
+        let scope = vec![keyvalue("shared.key", "scope")];
+        let attributes = vec![
+            keyvalue("shared.key", "first"),
+            keyvalue("shared_key", "normalized collision"),
+            keyvalue("shared.key", "last"),
+            keyvalue("é汉", "unicode"),
+            KeyValue {
+                key: "int".into(),
+                value: Some(AnyValue {
+                    value: Some(Val::IntValue(-123)),
+                }),
+            },
+            KeyValue {
+                key: "double".into(),
+                value: Some(AnyValue {
+                    value: Some(Val::DoubleValue(2.5)),
+                }),
+            },
+            KeyValue {
+                key: "ignored_bool".into(),
+                value: Some(AnyValue {
+                    value: Some(Val::BoolValue(true)),
+                }),
+            },
+            KeyValue {
+                key: "ignored_missing".into(),
+                value: None,
+            },
+        ];
+        for is_legacy in [false, true] {
+            for strategy in [
+                UnderscoreEscapingWithSuffixes,
+                UnderscoreEscapingWithoutSuffixes,
+                NoUtf8EscapingWithSuffixes,
+                NoTranslation,
+            ] {
+                let ctx = OtlpMetricCtx {
+                    is_legacy,
+                    metric_translation_strategy: strategy,
+                    ..Default::default()
+                };
+                let mut borrowed = TableData::new(0, 1);
+                let mut borrowed_row = borrowed.alloc_one_row();
+                write_tags_and_timestamp(
+                    &mut borrowed,
+                    &mut borrowed_row,
+                    Some(&resource),
+                    Some(&scope),
+                    DataPointAttributes::Borrowed(&attributes),
+                    123_000_000,
+                    &ctx,
+                )
+                .unwrap();
+                borrowed.add_row(borrowed_row);
+                let mut owned = TableData::new(0, 1);
+                let mut owned_row = owned.alloc_one_row();
+                write_tags_and_timestamp(
+                    &mut owned,
+                    &mut owned_row,
+                    Some(&resource),
+                    Some(&scope),
+                    DataPointAttributes::Owned(attributes.clone()),
+                    123_000_000,
+                    &ctx,
+                )
+                .unwrap();
+                owned.add_row(owned_row);
+                assert_eq!(
+                    borrowed.into_schema_and_rows(),
+                    owned.into_schema_and_rows()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_encode_gauge() {
         let mut tables = MultiTableData::default();
 
@@ -891,11 +1005,11 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let gauge = Gauge { data_points };
+        let mut gauge = Gauge { data_points };
         encode_gauge(
             &mut tables,
             "datamon",
-            &gauge,
+            &mut gauge,
             Some(&vec![]),
             Some(&vec![keyvalue("scope", "otel")]),
             &OtlpMetricCtx::default(),
@@ -938,14 +1052,14 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let sum = Sum {
+        let mut sum = Sum {
             data_points,
             ..Default::default()
         };
         encode_sum(
             &mut tables,
             "datamon",
-            &sum,
+            &mut sum,
             Some(&vec![]),
             Some(&vec![keyvalue("scope", "otel")]),
             &OtlpMetricCtx::default(),

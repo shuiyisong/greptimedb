@@ -180,6 +180,10 @@ name = "bench_prom"
 harness = false
 
 [[bench]]
+name = "bench_otlp_decode"
+harness = false
+
+[[bench]]
 name = "to_http_output"
 harness = false
 

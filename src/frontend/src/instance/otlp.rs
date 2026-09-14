@@ -18,6 +18,7 @@ pub mod trace_types;
 
 use std::sync::Arc;
 
+use api::v1::RowInsertRequests;
 use async_trait::async_trait;
 use auth::{
     OTLP_WRITE, PermissionChecker, PermissionCheckerRef, PermissionReq, PermissionTableTarget,
@@ -51,6 +52,20 @@ use table::requests::{
 use self::trace_ingest::trace_conventions;
 use crate::instance::Instance;
 use crate::metrics::{OTLP_LOGS_ROWS, OTLP_METRICS_ROWS};
+
+/// Optional storage path for converted OTLP metrics, after protocol and table permissions.
+#[async_trait]
+pub trait OtlpMetricIngestor: Send + Sync {
+    async fn check_write(&self) -> ServerResult<()>;
+
+    async fn ingest(
+        &self,
+        requests: RowInsertRequests,
+        ctx: QueryContextRef,
+    ) -> ServerResult<Output>;
+}
+
+pub type OtlpMetricIngestorRef = Arc<dyn OtlpMetricIngestor>;
 
 fn trace_permission_targets(
     table_name: &str,
@@ -101,6 +116,10 @@ impl OpenTelemetryProtocolHandler for Instance {
             .plugins
             .get::<OpenTelemetryProtocolInterceptorRef<servers::error::Error>>();
         interceptor_ref.pre_execute(ctx.clone())?;
+        let metric_ingestor = self.plugins.get::<OtlpMetricIngestorRef>();
+        if let Some(ingestor) = &metric_ingestor {
+            ingestor.check_write().await?;
+        }
         let ctx = Arc::new(ctx.fork());
 
         let input_names = request
@@ -120,8 +139,12 @@ impl OpenTelemetryProtocolHandler for Instance {
             .unwrap_or_default();
         metric_ctx.is_legacy = is_legacy;
 
+        let conversion_timer = servers::metrics::METRIC_OTLP_METRICS_STAGE_ELAPSED
+            .with_label_values(&["convert"])
+            .start_timer();
         let (requests, rows, semantic_index) =
             otlp::metrics::to_grpc_insert_requests(request, &mut metric_ctx)?;
+        drop(conversion_timer);
         self.check_row_insert_permission(&requests, &ctx, PermissionReq::Action(OTLP_WRITE))
             .context(AuthSnafu)?;
         self.cache_otlp_legacy(&input_names, &ctx, is_legacy)?;
@@ -143,7 +166,9 @@ impl OpenTelemetryProtocolHandler for Instance {
         };
 
         // If the user uses the legacy path, it is by default without metric engine.
-        if metric_ctx.is_legacy || !metric_ctx.with_metric_engine {
+        if let Some(ingestor) = metric_ingestor {
+            ingestor.ingest(requests, ctx).await
+        } else if metric_ctx.is_legacy || !metric_ctx.with_metric_engine {
             self.handle_row_inserts(requests, ctx, false, false)
                 .await
                 .map_err(BoxedError::new)

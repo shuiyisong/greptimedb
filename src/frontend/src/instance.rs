@@ -21,6 +21,7 @@ mod log_handler;
 mod logs;
 mod opentsdb;
 mod otlp;
+pub use otlp::{OtlpMetricIngestor, OtlpMetricIngestorRef};
 pub mod prom_store;
 mod promql;
 mod region_query;
@@ -3061,6 +3062,121 @@ mod tests {
 
         let _event_recorder = instance.event_recorder();
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_otlp_metric_ingestor_permissions_and_context() -> TestResult<()> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use otel_arrow_rust::proto::opentelemetry::collector::metrics::v1::ExportMetricsServiceRequest;
+        use otel_arrow_rust::proto::opentelemetry::metrics::v1::{
+            Gauge, Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics, metric,
+        };
+        use servers::query_handler::OpenTelemetryProtocolHandler;
+        use table::requests::{
+            SEMANTIC_PER_TABLE_INDEX_KEY, SEMANTIC_SIGNAL_TYPE, SEMANTIC_SOURCE,
+        };
+
+        struct Ingestor {
+            reject_write: bool,
+            checks: AtomicUsize,
+            ingests: AtomicUsize,
+        }
+
+        #[async_trait::async_trait]
+        impl OtlpMetricIngestor for Ingestor {
+            async fn check_write(&self) -> servers::error::Result<()> {
+                self.checks.fetch_add(1, Ordering::Relaxed);
+                if self.reject_write {
+                    return servers::error::InvalidParameterSnafu {
+                        reason: "test write rejection",
+                    }
+                    .fail();
+                }
+                Ok(())
+            }
+
+            async fn ingest(
+                &self,
+                requests: api::v1::RowInsertRequests,
+                ctx: QueryContextRef,
+            ) -> servers::error::Result<Output> {
+                assert_eq!(1, self.checks.load(Ordering::Relaxed));
+                assert_eq!(1, requests.inserts.len());
+                assert_eq!("denied", requests.inserts[0].table_name);
+                assert_eq!(1, requests.inserts[0].rows.as_ref().unwrap().rows.len());
+                assert_eq!(Some("metric"), ctx.extension(SEMANTIC_SIGNAL_TYPE));
+                assert_eq!(Some("opentelemetry"), ctx.extension(SEMANTIC_SOURCE));
+                assert!(ctx.extension(SEMANTIC_PER_TABLE_INDEX_KEY).is_some());
+                self.ingests.fetch_add(1, Ordering::Relaxed);
+                Ok(Output::new_with_affected_rows(1))
+            }
+        }
+
+        for (deny_protocol, deny_table, reject_write) in [
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+            (false, false, false),
+        ] {
+            let ingestor = Arc::new(Ingestor {
+                reject_write,
+                checks: AtomicUsize::new(0),
+                ingests: AtomicUsize::new(0),
+            });
+            let plugins = Plugins::new();
+            plugins.insert::<OtlpMetricIngestorRef>(ingestor.clone());
+            if deny_protocol {
+                plugins.insert::<PermissionCheckerRef>(Arc::new(
+                    RejectEndpointPermissionChecker::default(),
+                ));
+            } else if deny_table {
+                plugins.insert::<PermissionCheckerRef>(Arc::new(RejectUnresolvedPermissionChecker));
+            }
+            let instance = test_instance_with_plugins(
+                test_table(1024, "denied")?,
+                test_table(1025, "target")?,
+                plugins,
+            )
+            .await?;
+            let ctx = test_query_ctx(1);
+            instance
+                .cache_otlp_legacy(&["denied".into()], &ctx, false)
+                .unwrap();
+            let request = ExportMetricsServiceRequest {
+                resource_metrics: vec![ResourceMetrics {
+                    scope_metrics: vec![ScopeMetrics {
+                        metrics: vec![Metric {
+                            name: "denied".into(),
+                            data: Some(metric::Data::Gauge(Gauge {
+                                data_points: vec![NumberDataPoint::default()],
+                            })),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+            };
+            let result = instance.metrics(request, ctx.clone()).await;
+            if deny_protocol || deny_table {
+                assert_permission_denied(result);
+            } else if reject_write {
+                assert!(result.is_err());
+            } else {
+                assert!(matches!(result.unwrap().data, OutputData::AffectedRows(1)));
+            }
+            assert_eq!(
+                usize::from(!deny_protocol),
+                ingestor.checks.load(Ordering::Relaxed)
+            );
+            assert_eq!(
+                usize::from(!deny_protocol && !deny_table && !reject_write),
+                ingestor.ingests.load(Ordering::Relaxed)
+            );
+            assert!(ctx.extension(SEMANTIC_SIGNAL_TYPE).is_none());
+        }
         Ok(())
     }
 

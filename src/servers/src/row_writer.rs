@@ -210,11 +210,14 @@ impl MultiTableData {
 }
 
 /// Write data as tags into the table data.
-pub fn write_tags(
+pub fn write_tags<K>(
     table_data: &mut TableData,
-    tags: impl Iterator<Item = (String, String)>,
+    tags: impl Iterator<Item = (K, String)>,
     one_row: &mut Vec<Value>,
-) -> Result<()> {
+) -> Result<()>
+where
+    K: AsRef<str> + Into<String>,
+{
     let ktv_iter = tags.map(|(k, v)| (k, ColumnDataType::String, Some(ValueData::StringValue(v))));
     write_by_semantic_type(table_data, SemanticType::Tag, ktv_iter, one_row)
 }
@@ -325,12 +328,15 @@ pub(crate) fn write_by_schema(
     Ok(())
 }
 
-fn write_by_semantic_type(
+fn write_by_semantic_type<K>(
     table_data: &mut TableData,
     semantic_type: SemanticType,
-    ktv_iter: impl Iterator<Item = (String, ColumnDataType, Option<ValueData>)>,
+    ktv_iter: impl Iterator<Item = (K, ColumnDataType, Option<ValueData>)>,
     one_row: &mut Vec<Value>,
-) -> Result<()> {
+) -> Result<()>
+where
+    K: AsRef<str> + Into<String>,
+{
     let TableData {
         schema,
         column_indexes,
@@ -338,12 +344,13 @@ fn write_by_semantic_type(
     } = table_data;
 
     for (name, datatype, value) in ktv_iter {
-        let index = column_indexes.get(&name);
+        let index = column_indexes.get(name.as_ref()).copied();
         if let Some(index) = index {
-            check_schema(datatype, semantic_type, &schema[*index])?;
-            one_row[*index].value_data = value;
+            check_schema(datatype, semantic_type, &schema[index])?;
+            one_row[index].value_data = value;
         } else {
             let index = schema.len();
+            let name = name.into();
             schema.push(ColumnSchema {
                 column_name: name.clone(),
                 datatype: datatype as i32,
