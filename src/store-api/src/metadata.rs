@@ -278,9 +278,7 @@ impl RegionMetadata {
 
     /// Find column index by name.
     pub fn column_index_by_name(&self, column_name: &str) -> Option<usize> {
-        self.column_metadatas
-            .iter()
-            .position(|col| col.column_schema.name == column_name)
+        self.schema.column_index_by_name(column_name)
     }
 
     /// Returns the time index column
@@ -1523,6 +1521,8 @@ mod test {
     #[test]
     fn test_region_metadata() {
         let region_metadata = build_test_region_metadata();
+        check_columns(&region_metadata, &["a", "b", "c"]);
+        assert_eq!(None, region_metadata.column_index_by_name("missing"));
         assert_eq!("c", region_metadata.time_index_column().column_schema.name);
         assert_eq!(
             "a",
@@ -1537,6 +1537,7 @@ mod test {
         let serialized = serde_json::to_string(&region_metadata).unwrap();
         let deserialized: RegionMetadata = serde_json::from_str(&serialized).unwrap();
         assert_eq!(region_metadata, deserialized);
+        check_columns(&deserialized, &["a", "b", "c"]);
     }
 
     #[test]
@@ -1807,6 +1808,9 @@ mod test {
             .map(|col| &col.column_schema.name)
             .collect();
         assert_eq!(names, actual);
+        for (index, name) in names.iter().enumerate() {
+            assert_eq!(Some(index), metadata.column_index_by_name(name));
+        }
     }
 
     fn get_columns_default_constraint(

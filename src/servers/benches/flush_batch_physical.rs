@@ -135,7 +135,6 @@ fn make_physical_table_metadata(num_tags: usize) -> PhysicalTableMetadata {
         DtColumnSchema::new("greptime_value", ConcreteDataType::float64_datatype(), true),
     ];
 
-    let mut name_to_ids = HashMap::new();
     let mut column_ids = vec![0u32, 1, 2];
 
     for i in 0..num_tags {
@@ -146,7 +145,6 @@ fn make_physical_table_metadata(num_tags: usize) -> PhysicalTableMetadata {
             ConcreteDataType::string_datatype(),
             true,
         ));
-        name_to_ids.insert(tag_name, col_id);
         column_ids.push(col_id);
     }
 
@@ -156,7 +154,6 @@ fn make_physical_table_metadata(num_tags: usize) -> PhysicalTableMetadata {
 
     PhysicalTableMetadata {
         table_info: Arc::new(table_info),
-        col_name_to_ids: Some(name_to_ids),
     }
 }
 
@@ -286,6 +283,29 @@ fn bench_flush_batch_physical(c: &mut Criterion) {
                 });
             },
         );
+    }
+
+    // Keep each batch narrow while growing the shared physical label namespace.
+    for physical_tags in [10_000, 30_000, 50_000] {
+        let catalog_provider = BenchCatalogProvider {
+            table: make_physical_table_metadata(physical_tags),
+        };
+        let table_batches = make_table_batches(10, 100, &tag_refs);
+        group.bench_function(BenchmarkId::new("physical_tags", physical_tags), |b| {
+            b.iter(|| {
+                let affected_rows = rt
+                    .block_on(flush_batch_physical(
+                        &table_batches,
+                        "phy",
+                        &ctx,
+                        &partition_provider,
+                        &write_dispatcher,
+                        &catalog_provider,
+                    ))
+                    .unwrap();
+                assert_eq!(affected_rows, 1000);
+            });
+        });
     }
 
     group.finish();

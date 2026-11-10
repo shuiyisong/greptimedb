@@ -35,6 +35,8 @@ pub struct PhysicalRegionState {
     /// paths (e.g. write request verification) can hold a cheap snapshot
     /// instead of deep-cloning the whole map on every row batch.
     physical_columns: Arc<HashMap<String, ColumnMetadata>>,
+    /// Field names avoid scanning all physical tags when filling missing fields on writes.
+    field_column_names: Arc<HashSet<String>>,
     /// Name of the time index column, cached at region load so that the write
     /// path doesn't have to scan `physical_columns` for the timestamp on every
     /// row batch. The time index is fixed at region creation and never
@@ -60,9 +62,15 @@ impl PhysicalRegionState {
             .find(|(_, meta)| meta.semantic_type == SemanticType::Timestamp)
             .map(|(name, _)| name.clone())
             .unwrap_or_default();
+        let field_column_names = physical_columns
+            .iter()
+            .filter(|(_, meta)| meta.semantic_type == SemanticType::Field)
+            .map(|(name, _)| name.clone())
+            .collect();
         Self {
             logical_regions: HashSet::new(),
             physical_columns: Arc::new(physical_columns),
+            field_column_names: Arc::new(field_column_names),
             time_index_column_name,
             primary_key_encoding,
             options,
@@ -84,6 +92,11 @@ impl PhysicalRegionState {
     /// after releasing the state lock.
     pub fn physical_columns_snapshot(&self) -> Arc<HashMap<String, ColumnMetadata>> {
         self.physical_columns.clone()
+    }
+
+    /// Returns the field names from the same state as the physical column snapshot.
+    pub fn field_column_names_snapshot(&self) -> Arc<HashSet<String>> {
+        self.field_column_names.clone()
     }
 
     /// Returns the cached name of the time index column.
@@ -154,6 +167,11 @@ impl MetricEngineState {
                 SemanticType::Timestamp,
                 "unexpected time index column {col} added to an existing physical region"
             );
+            if meta.semantic_type == SemanticType::Field {
+                Arc::make_mut(&mut state.field_column_names).insert(col.clone());
+            } else if state.field_column_names.contains(&col) {
+                Arc::make_mut(&mut state.field_column_names).remove(&col);
+            }
             Arc::make_mut(&mut state.physical_columns).insert(col, meta);
         }
     }
@@ -288,5 +306,77 @@ impl MetricEngineState {
 
     pub fn is_logical_region_exist(&self, logical_region_id: RegionId) -> bool {
         self.logical_regions().contains_key(&logical_region_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datatypes::prelude::ConcreteDataType;
+    use datatypes::schema::ColumnSchema;
+
+    use super::*;
+
+    #[test]
+    fn test_field_names_follow_physical_schema_updates() {
+        let column = |name: &str, semantic_type, column_id| {
+            (
+                name.to_string(),
+                ColumnMetadata {
+                    column_schema: ColumnSchema::new(
+                        name,
+                        if semantic_type == SemanticType::Timestamp {
+                            ConcreteDataType::timestamp_millisecond_datatype()
+                        } else {
+                            ConcreteDataType::string_datatype()
+                        },
+                        semantic_type != SemanticType::Timestamp,
+                    ),
+                    semantic_type,
+                    column_id,
+                },
+            )
+        };
+        let region_id = RegionId::new(1, 1);
+        let mut state = MetricEngineState::default();
+        state.add_physical_region(
+            region_id,
+            HashMap::from([
+                column("tag", SemanticType::Tag, 1),
+                column("value", SemanticType::Field, 2),
+                column("ts", SemanticType::Timestamp, 0),
+            ]),
+            PrimaryKeyEncoding::Sparse,
+            PhysicalRegionOptions {
+                index: Default::default(),
+            },
+            TimeUnit::Millisecond,
+        );
+        let physical = &state.physical_region_states()[&to_data_region_id(region_id)];
+        let old_columns = physical.physical_columns_snapshot();
+        let old_fields = physical.field_column_names_snapshot();
+        assert_eq!(*old_fields, HashSet::from(["value".to_string()]));
+
+        for _ in 0..2 {
+            state.add_physical_columns(
+                region_id,
+                [
+                    column("new_tag", SemanticType::Tag, 3),
+                    column("histogram", SemanticType::Field, 4),
+                ],
+            );
+            let physical = &state.physical_region_states()[&to_data_region_id(region_id)];
+            assert_eq!(
+                *physical.field_column_names_snapshot(),
+                HashSet::from(["value".to_string(), "histogram".to_string(),])
+            );
+            for name in physical.field_column_names_snapshot().iter() {
+                assert_eq!(
+                    physical.physical_columns()[name].semantic_type,
+                    SemanticType::Field
+                );
+            }
+        }
+        assert_eq!(*old_fields, HashSet::from(["value".to_string()]));
+        assert!(!old_columns.contains_key("histogram"));
     }
 }

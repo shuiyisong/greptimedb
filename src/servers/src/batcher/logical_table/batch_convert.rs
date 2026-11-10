@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -23,7 +23,7 @@ use common_query::prelude::{greptime_timestamp, greptime_value};
 use metric_engine::batch_modifier::{TagColumnInfo, modify_batch_sparse};
 use smallvec::SmallVec;
 use snafu::{OptionExt, ResultExt, ensure};
-use table::metadata::TableId;
+use table::metadata::{TableId, TableMeta};
 
 use crate::error;
 use crate::error::Result;
@@ -98,7 +98,7 @@ pub struct TableBatch {
 pub(in crate::batcher::logical_table) fn columns_taxonomy(
     batch_schema: &Arc<ArrowSchema>,
     table_name: &str,
-    name_to_ids: &HashMap<String, u32>,
+    physical_meta: &TableMeta,
     partition_columns: &HashSet<&str>,
 ) -> Result<(Vec<TagColumnInfo>, SmallVec<[usize; 3]>)> {
     let mut tag_columns = Vec::new();
@@ -114,14 +114,17 @@ pub(in crate::batcher::logical_table) fn columns_taxonomy(
     for (index, field) in batch_schema.fields().iter().enumerate() {
         match field.data_type() {
             ArrowDataType::Utf8 => {
-                let column_id = name_to_ids.get(field.name()).copied().with_context(|| {
-                    error::InvalidPromRemoteRequestSnafu {
+                let column_id = physical_meta
+                    .schema
+                    .column_index_by_name(field.name())
+                    .and_then(|index| physical_meta.column_ids.get(index))
+                    .copied()
+                    .with_context(|| error::InvalidPromRemoteRequestSnafu {
                         msg: format!(
                             "Column '{}' from logical table '{}' not found in physical table column IDs",
                             field.name(),
                             table_name
                         ),
-                    }
                 })?;
                 tag_columns.push(TagColumnInfo {
                     name: field.name().clone(),
@@ -197,7 +200,7 @@ pub(in crate::batcher::logical_table) fn columns_taxonomy(
 /// and applies sparse primary key modification.
 pub(in crate::batcher::logical_table) fn transform_logical_batches_to_physical(
     table_batches: &[TableBatch],
-    name_to_ids: &HashMap<String, u32>,
+    physical_meta: &TableMeta,
     partition_columns_set: &HashSet<&str>,
 ) -> Result<Vec<RecordBatch>> {
     let mut modified_batches: Vec<RecordBatch> =
@@ -216,7 +219,7 @@ pub(in crate::batcher::logical_table) fn transform_logical_batches_to_physical(
             let (tag_columns, essential_col_indices) = columns_taxonomy(
                 &batch_schema,
                 &table_batch.table_name,
-                name_to_ids,
+                physical_meta,
                 partition_columns_set,
             )?;
 
@@ -273,20 +276,40 @@ pub(in crate::batcher::logical_table) fn concat_modified_batches(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashSet;
     use std::sync::Arc;
 
     use arrow::array::{Array, StringArray, TimestampMillisecondArray};
     use arrow::datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
     use arrow::record_batch::RecordBatch;
+    use datatypes::prelude::ConcreteDataType;
+    use datatypes::schema::{ColumnSchema, Schema};
     use metric_engine::batch_modifier::modify_batch_sparse;
     use smallvec::SmallVec;
+    use table::metadata::TableMeta;
 
     use crate::batcher::logical_table::batch_convert::{
         TableBatch, columns_taxonomy, transform_logical_batches_to_physical,
     };
     use crate::batcher::logical_table::test_util::mock_aligned_tag_batch;
     use crate::error::Error;
+
+    fn physical_meta(columns: impl IntoIterator<Item = (&'static str, u32)>) -> TableMeta {
+        let (columns, column_ids): (Vec<_>, Vec<_>) = columns
+            .into_iter()
+            .map(|(name, id)| {
+                (
+                    ColumnSchema::new(name, ConcreteDataType::string_datatype(), true),
+                    id,
+                )
+            })
+            .unzip();
+        TableMeta {
+            schema: Arc::new(Schema::new(columns)),
+            column_ids,
+            ..TableMeta::empty()
+        }
+    }
 
     #[test]
     fn test_collect_tag_columns_and_non_tag_indices_keeps_partition_tag_column() {
@@ -300,14 +323,15 @@ mod tests {
             Field::new("host", ArrowDataType::Utf8, true),
             Field::new("region", ArrowDataType::Utf8, true),
         ]));
-        let name_to_ids =
-            HashMap::from([("host".to_string(), 1_u32), ("region".to_string(), 2_u32)]);
+        let physical_meta = physical_meta([("host", 1_u32), ("region", 2_u32)]);
         let partition_columns = HashSet::from(["host"]);
 
         let (tag_columns, non_tag_indices) =
-            columns_taxonomy(&schema, "cpu", &name_to_ids, &partition_columns).unwrap();
+            columns_taxonomy(&schema, "cpu", &physical_meta, &partition_columns).unwrap();
 
         assert_eq!(2, tag_columns.len());
+        assert_eq!(tag_columns[0].column_id, 1);
+        assert_eq!(tag_columns[1].column_id, 2);
         assert_eq!(&[0, 1, 2], non_tag_indices.as_slice());
     }
 
@@ -323,12 +347,11 @@ mod tests {
             ),
             Field::new("region", ArrowDataType::Utf8, true),
         ]));
-        let name_to_ids =
-            HashMap::from([("host".to_string(), 1_u32), ("region".to_string(), 2_u32)]);
+        let physical_meta = physical_meta([("host", 1_u32), ("region", 2_u32)]);
         let partition_columns = HashSet::from(["host", "region"]);
 
         let (_tag_columns, non_tag_indices): (_, SmallVec<[usize; 3]>) =
-            columns_taxonomy(&schema, "cpu", &name_to_ids, &partition_columns).unwrap();
+            columns_taxonomy(&schema, "cpu", &physical_meta, &partition_columns).unwrap();
 
         assert_eq!(&[2, 1, 0, 3], non_tag_indices.as_slice());
     }
@@ -345,10 +368,10 @@ mod tests {
             Field::new("host", ArrowDataType::Utf8, true),
             Field::new("invalid", ArrowDataType::Boolean, true),
         ]));
-        let name_to_ids = HashMap::from([("host".to_string(), 1_u32)]);
+        let physical_meta = physical_meta([("host", 1_u32)]);
         let partition_columns = HashSet::from(["host"]);
 
-        let result = columns_taxonomy(&schema, "cpu", &name_to_ids, &partition_columns);
+        let result = columns_taxonomy(&schema, "cpu", &physical_meta, &partition_columns);
 
         assert!(matches!(
             result,
@@ -363,10 +386,10 @@ mod tests {
             Field::new("greptime_value", ArrowDataType::Float64, true),
             Field::new("host", ArrowDataType::Utf8, true),
         ]));
-        let name_to_ids = HashMap::from([("host".to_string(), 1_u32)]);
+        let physical_meta = physical_meta([("host", 1_u32)]);
         let partition_columns = HashSet::from(["host"]);
 
-        let result = columns_taxonomy(&schema, "cpu", &name_to_ids, &partition_columns);
+        let result = columns_taxonomy(&schema, "cpu", &physical_meta, &partition_columns);
 
         assert!(matches!(
             result,
@@ -390,10 +413,10 @@ mod tests {
             Field::new("greptime_value", ArrowDataType::Float64, true),
             Field::new("host", ArrowDataType::Utf8, true),
         ]));
-        let name_to_ids = HashMap::from([("host".to_string(), 1_u32)]);
+        let physical_meta = physical_meta([("host", 1_u32)]);
         let partition_columns = HashSet::from(["host"]);
 
-        let result = columns_taxonomy(&schema, "cpu", &name_to_ids, &partition_columns);
+        let result = columns_taxonomy(&schema, "cpu", &physical_meta, &partition_columns);
 
         assert!(matches!(
             result,
@@ -413,10 +436,10 @@ mod tests {
             Field::new("value2", ArrowDataType::Float64, true),
             Field::new("host", ArrowDataType::Utf8, true),
         ]));
-        let name_to_ids = HashMap::from([("host".to_string(), 1_u32)]);
+        let physical_meta = physical_meta([("host", 1_u32)]);
         let partition_columns = HashSet::from(["host"]);
 
-        let result = columns_taxonomy(&schema, "cpu", &name_to_ids, &partition_columns);
+        let result = columns_taxonomy(&schema, "cpu", &physical_meta, &partition_columns);
 
         assert!(matches!(
             result,
@@ -459,7 +482,7 @@ mod tests {
         )
         .unwrap();
 
-        let name_to_ids = HashMap::from([("tag1".to_string(), 1), ("tag2".to_string(), 2)]);
+        let physical_meta = physical_meta([("tag1", 1), ("tag2", 2)]);
         let partition_columns = HashSet::new();
 
         // A batch that only has tag1, same values as batch2 for ts and val.
@@ -475,12 +498,22 @@ mod tests {
 
         // Simulate the new loop logic in flush_batch_physical:
         // Resolve taxonomy FOR EACH BATCH.
-        let (tag_columns2, indices2) =
-            columns_taxonomy(&batch2.schema(), "table", &name_to_ids, &partition_columns).unwrap();
+        let (tag_columns2, indices2) = columns_taxonomy(
+            &batch2.schema(),
+            "table",
+            &physical_meta,
+            &partition_columns,
+        )
+        .unwrap();
         let modified2 = modify_batch_sparse(batch2, 123, &tag_columns2, &indices2).unwrap();
 
-        let (tag_columns3, indices3) =
-            columns_taxonomy(&batch3.schema(), "table", &name_to_ids, &partition_columns).unwrap();
+        let (tag_columns3, indices3) = columns_taxonomy(
+            &batch3.schema(),
+            "table",
+            &physical_meta,
+            &partition_columns,
+        )
+        .unwrap();
         let modified3 = modify_batch_sparse(batch3, 123, &tag_columns3, &indices3).unwrap();
 
         let pk2 = modified2
@@ -513,11 +546,14 @@ mod tests {
             row_count: 1,
         }];
 
-        let name_to_ids = HashMap::from([("tag1".to_string(), 1)]);
+        let physical_meta = physical_meta([("tag1", 1)]);
         let partition_columns = HashSet::new();
-        let modified =
-            transform_logical_batches_to_physical(&table_batches, &name_to_ids, &partition_columns)
-                .unwrap();
+        let modified = transform_logical_batches_to_physical(
+            &table_batches,
+            &physical_meta,
+            &partition_columns,
+        )
+        .unwrap();
 
         assert_eq!(1, modified.len());
         assert_eq!(3, modified[0].num_columns());
@@ -537,12 +573,15 @@ mod tests {
             row_count: 1,
         }];
 
-        // tag1 is missing from name_to_ids, causing columns_taxonomy to fail.
-        let name_to_ids = HashMap::new();
+        // tag1 is missing from physical_meta, causing columns_taxonomy to fail.
+        let physical_meta = physical_meta([]);
         let partition_columns = HashSet::new();
-        let err =
-            transform_logical_batches_to_physical(&table_batches, &name_to_ids, &partition_columns)
-                .unwrap_err();
+        let err = transform_logical_batches_to_physical(
+            &table_batches,
+            &physical_meta,
+            &partition_columns,
+        )
+        .unwrap_err();
 
         assert!(
             err.to_string()
@@ -570,11 +609,14 @@ mod tests {
             },
         ];
 
-        let name_to_ids = HashMap::from([("tag1".to_string(), 1), ("tag2".to_string(), 2)]);
+        let physical_meta = physical_meta([("tag1", 1), ("tag2", 2)]);
         let partition_columns = HashSet::new();
-        let modified =
-            transform_logical_batches_to_physical(&table_batches, &name_to_ids, &partition_columns)
-                .unwrap();
+        let modified = transform_logical_batches_to_physical(
+            &table_batches,
+            &physical_meta,
+            &partition_columns,
+        )
+        .unwrap();
 
         assert_eq!(2, modified.len());
     }
@@ -599,12 +641,15 @@ mod tests {
             },
         ];
 
-        // tag1 is missing from name_to_ids, causing batch1 to fail.
-        let name_to_ids = HashMap::from([("tag2".to_string(), 2)]);
+        // tag1 is missing from physical_meta, causing batch1 to fail.
+        let physical_meta = physical_meta([("tag2", 2)]);
         let partition_columns = HashSet::new();
-        let err =
-            transform_logical_batches_to_physical(&table_batches, &name_to_ids, &partition_columns)
-                .unwrap_err();
+        let err = transform_logical_batches_to_physical(
+            &table_batches,
+            &physical_meta,
+            &partition_columns,
+        )
+        .unwrap_err();
 
         assert!(err.to_string().contains("tag1"));
     }

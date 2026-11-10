@@ -561,7 +561,7 @@ impl MetricEngineInner {
     ) -> Result<()> {
         // Check if the region exists
         let data_region_id = to_data_region_id(physical_region_id);
-        let (physical_columns, ts_name) = {
+        let (physical_columns, field_column_names, ts_name) = {
             let state = self.state.read().unwrap();
             if !state.is_logical_region_exist(logical_region_id) {
                 error!("Trying to write to an nonexistent region {logical_region_id}");
@@ -579,6 +579,7 @@ impl MetricEngineInner {
                 })?;
             (
                 physical_state.physical_columns_snapshot(),
+                physical_state.field_column_names_snapshot(),
                 physical_state.time_index_column_name().to_string(),
             )
         };
@@ -675,10 +676,8 @@ impl MetricEngineInner {
                 }
             }
 
-            for (field_name, field_meta) in physical_columns
-                .iter()
-                .filter(|(_, col)| col.semantic_type == SemanticType::Field)
-            {
+            for field_name in field_column_names.iter() {
+                let field_meta = &physical_columns[field_name];
                 if !rows.schema.iter().any(|col| col.column_name == *field_name) {
                     Self::fill_missing_field_column(
                         logical_region_id,

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashSet;
 use std::sync::{Arc, Weak};
 
 use arrow_schema::SchemaRef as ArrowSchemaRef;
@@ -33,7 +34,7 @@ use datatypes::value::Value;
 use datatypes::vectors::{
     Int64Vector, Int64VectorBuilder, StringVector, StringVectorBuilder, VectorRef,
 };
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use snafu::{OptionExt, ResultExt};
 use sql::statements;
 use store_api::storage::{ScanRequest, TableId};
@@ -272,10 +273,40 @@ impl InformationSchemaColumnsBuilder {
         let predicates = Predicates::from_scan_request(&request);
 
         for schema_name in catalog_manager.schema_names(&catalog_name, None).await? {
-            let mut stream = catalog_manager.tables(&catalog_name, &schema_name, None);
+            if !predicates.eval(&[
+                (TABLE_CATALOG, &Value::from(catalog_name.as_str())),
+                (TABLE_SCHEMA, &Value::from(schema_name.as_str())),
+            ]) {
+                continue;
+            }
+            let mut stream =
+                if let Some(Value::String(table_name)) = predicates.find_eq_value(TABLE_NAME) {
+                    futures::stream::iter(
+                        catalog_manager
+                            .table(&catalog_name, &schema_name, table_name.as_utf8(), None)
+                            .await?
+                            .map(Ok),
+                    )
+                    .boxed()
+                } else {
+                    catalog_manager.tables(&catalog_name, &schema_name, None)
+                };
 
             while let Some(table) = stream.try_next().await? {
-                let keys = &table.table_info().meta.primary_key_indices;
+                let table_info = table.table_info();
+                if !predicates.eval(&[
+                    (TABLE_CATALOG, &Value::from(catalog_name.as_str())),
+                    (TABLE_SCHEMA, &Value::from(schema_name.as_str())),
+                    (TABLE_NAME, &Value::from(table_info.name.as_str())),
+                ]) {
+                    continue;
+                }
+                let keys: HashSet<_> = table_info
+                    .meta
+                    .primary_key_indices
+                    .iter()
+                    .copied()
+                    .collect();
                 let schema = table.schema();
 
                 for (idx, column) in schema.column_schemas().iter().enumerate() {
@@ -292,7 +323,7 @@ impl InformationSchemaColumnsBuilder {
                         idx,
                         &catalog_name,
                         &schema_name,
-                        &table.table_info().name,
+                        &table_info.name,
                         semantic_type,
                         column,
                     );
@@ -470,5 +501,114 @@ impl DfPartitionStream for InformationSchemaColumns {
                     .map_err(Into::into)
             }),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::prelude::{col, lit};
+    use table::test_util::EmptyTable;
+    use table::test_util::table_info::test_table_info;
+
+    use super::*;
+    use crate::memory::MemoryCatalogManager;
+    use crate::{RegisterSchemaRequest, RegisterTableRequest};
+
+    #[tokio::test]
+    async fn test_columns_filtering_and_unsorted_primary_keys() {
+        let schema = Arc::new(Schema::new(vec![
+            ColumnSchema::new("host", ConcreteDataType::string_datatype(), true),
+            ColumnSchema::new("value", ConcreteDataType::float64_datatype(), true),
+            ColumnSchema::new("zone", ConcreteDataType::string_datatype(), true),
+            ColumnSchema::new(
+                "ts",
+                ConcreteDataType::timestamp_millisecond_datatype(),
+                false,
+            )
+            .with_time_index(true),
+        ]));
+        let mut info = test_table_info(1024, "metric", "public", "test", schema);
+        info.meta.primary_key_indices = vec![2, 0];
+        let manager = MemoryCatalogManager::new_with_table(EmptyTable::from_table_info(&info));
+        manager
+            .register_schema_sync(RegisterSchemaRequest {
+                catalog: "test".to_string(),
+                schema: "other".to_string(),
+            })
+            .unwrap();
+        info.schema_name = "other".to_string();
+        info.name = "second".to_string();
+        manager
+            .register_table_sync(RegisterTableRequest {
+                catalog: "test".to_string(),
+                schema: "other".to_string(),
+                table_name: info.name.clone(),
+                table_id: 1025,
+                table: EmptyTable::from_table_info(&info),
+            })
+            .unwrap();
+        let manager: Arc<dyn CatalogManager> = manager;
+        let columns = InformationSchemaColumns::new("test".to_string(), Arc::downgrade(&manager));
+        let selected = columns
+            .builder()
+            .make_columns(Some(ScanRequest {
+                filters: vec![
+                    col(TABLE_SCHEMA).eq(lit("public")),
+                    col(TABLE_NAME).eq(lit("metric")),
+                ],
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        assert_eq!(selected.num_rows(), 4);
+        let keys = selected
+            .iter_column_as_string(selected.schema.column_index_by_name(COLUMN_KEY).unwrap())
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            keys,
+            [
+                PRI_COLUMN_KEY,
+                EMPTY_STR,
+                PRI_COLUMN_KEY,
+                TIME_INDEX_COLUMN_KEY
+            ]
+        );
+
+        // A missing table/schema value cannot reject the other side of an OR on columns.
+        for filter in [
+            col(TABLE_NAME)
+                .eq(lit("missing"))
+                .or(col(COLUMN_NAME).eq(lit("value"))),
+            col(TABLE_SCHEMA)
+                .eq(lit("missing"))
+                .or(col(COLUMN_NAME).eq(lit("value"))),
+            !col(TABLE_NAME)
+                .eq(lit("missing"))
+                .and(col(COLUMN_NAME).eq(lit("value"))),
+        ] {
+            let is_negated = matches!(filter, datafusion::logical_expr::Expr::Not(_));
+            let batch = columns
+                .builder()
+                .make_columns(Some(ScanRequest {
+                    filters: vec![
+                        col(TABLE_SCHEMA)
+                            .eq(lit("public"))
+                            .or(col(TABLE_SCHEMA).eq(lit("other"))),
+                        filter,
+                    ],
+                    ..Default::default()
+                }))
+                .await
+                .unwrap();
+            assert_eq!(batch.num_rows(), if is_negated { 8 } else { 2 });
+            if !is_negated {
+                assert!(
+                    batch
+                        .iter_column_as_string(3)
+                        .all(|name| name.as_deref() == Some("value"))
+                );
+            }
+        }
     }
 }

@@ -276,14 +276,15 @@ async fn flush_batch_physical_tracked(
     };
 
     let physical_table_info = physical_table.table_info;
-    let name_to_ids = physical_table
-        .col_name_to_ids
-        .with_context(|| error::InternalSnafu {
+    ensure!(
+        physical_table_info.meta.column_ids.len() == physical_table_info.meta.schema.num_columns(),
+        error::InternalSnafu {
             err_msg: format!(
                 "Physical table '{}' has no column IDs for pending flush",
                 physical_table_name
             ),
-        })?;
+        }
+    );
 
     // 2. Get the physical table's partition rule (one lookup instead of N)
     let (partition_rule, partition_versions) = {
@@ -301,7 +302,7 @@ async fn flush_batch_physical_tracked(
     // 3. Transform each logical table batch into physical format
     let modified_batches = batch_convert::transform_logical_batches_to_physical(
         table_batches,
-        &name_to_ids,
+        &physical_table_info.meta,
         &partition_columns_set,
     )?;
 
@@ -1015,6 +1016,37 @@ mod tests {
         assert_eq!(0, dispatcher.writes.load(Ordering::SeqCst));
     }
 
+    #[tokio::test]
+    async fn test_flush_batch_physical_rejects_incomplete_column_ids() {
+        for column_ids in [vec![], vec![0, 1, 2], vec![0, 1, 2, 3, 4]] {
+            let mut table = mock_physical_table_metadata(1024);
+            Arc::make_mut(&mut table.table_info).meta.column_ids = column_ids;
+            let partition_calls = Arc::new(AtomicUsize::new(0));
+            let dispatcher = MockFlushWriteDispatcher::default();
+            let batches = vec![TableBatch {
+                table_name: "logical".to_string(),
+                table_id: 12,
+                batches: vec![mock_aligned_tag_batch("tag1", "host", 1000, 1.0)],
+                row_count: 1,
+            }];
+            let err = flush_batch_physical(
+                &batches,
+                "phy",
+                &session::context::QueryContext::arc(),
+                &MockFlushPartitionProvider {
+                    partition_rule_calls: partition_calls.clone(),
+                },
+                &dispatcher,
+                &MockFlushCatalogProvider { table: Some(table) },
+            )
+            .await
+            .unwrap_err();
+            assert!(err.to_string().contains("has no column IDs"));
+            assert_eq!(partition_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(dispatcher.writes.load(Ordering::SeqCst), 0);
+        }
+    }
+
     fn mock_physical_table_metadata(table_id: TableId) -> PhysicalTableMetadata {
         let schema = Arc::new(
             DtSchema::try_new(vec![
@@ -1046,7 +1078,6 @@ mod tests {
 
         PhysicalTableMetadata {
             table_info: Arc::new(table_info),
-            col_name_to_ids: Some(HashMap::from([("tag1".to_string(), 3)])),
         }
     }
 

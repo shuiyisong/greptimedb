@@ -42,8 +42,6 @@ use crate::metrics;
 #[derive(Clone)]
 pub struct PhysicalTableMetadata {
     pub table_info: TableInfoRef,
-    /// Mapping from column name to column id
-    pub col_name_to_ids: Option<HashMap<String, u32>>,
 }
 
 #[async_trait]
@@ -128,13 +126,8 @@ impl PhysicalFlushCatalogProvider for CatalogManagerPhysicalFlushAdapter {
             .table(catalog, schema, table_name, Some(query_ctx))
             .await
             .map(|table| {
-                table.map(|table| {
-                    let table_info = table.table_info();
-                    let name_to_ids = table_info.name_to_ids();
-                    PhysicalTableMetadata {
-                        table_info,
-                        col_name_to_ids: name_to_ids,
-                    }
+                table.map(|table| PhysicalTableMetadata {
+                    table_info: table.table_info(),
                 })
             })
     }
@@ -337,10 +330,12 @@ mod tests {
     use common_grpc::flight::FlightDecoder;
     use common_meta::ddl::test_util::datanode_handler::DatanodeWatcher;
     use common_meta::test_util::MockDatanodeManager;
+    use datatypes::schema::Schema;
     use operator::test_util::{create_partition_rule_manager, prepare_mocked_backend};
     use operator::write_dispatcher::{TrackedWrite, WriteDispatcher};
     use partition::partition::{PartitionRule, RegionMask};
     use store_api::storage::RegionId;
+    use table::metadata::TableMeta;
 
     use crate::batcher::logical_table::batch_convert::{self, RecordBatchWithTsIdx, TableBatch};
     use crate::batcher::logical_table::region_write::{
@@ -407,6 +402,11 @@ mod tests {
             ],
         )
         .unwrap();
+        let physical_meta = TableMeta {
+            schema: Arc::new(Schema::try_from(logical_batch.schema()).unwrap()),
+            column_ids: vec![100, 101, 1, 2],
+            ..TableMeta::empty()
+        };
         let table_batches = [TableBatch {
             table_name: "metric".to_string(),
             table_id: 2048,
@@ -415,7 +415,7 @@ mod tests {
         }];
         let modified = batch_convert::transform_logical_batches_to_physical(
             &table_batches,
-            &HashMap::from([("host".to_string(), 1), ("zone".to_string(), 2)]),
+            &physical_meta,
             &HashSet::from(["host"]),
         )
         .unwrap();
